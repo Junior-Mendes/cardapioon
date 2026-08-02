@@ -34,10 +34,18 @@ services:
     restart: always
     env_file:
       - .env
+    # O utilizador do contentor não tem privilégios (uid 100). O bind-mount de
+    # traefik_dynamic vem do host, pelo que tem de lhe pertencer, ou a aplicação não
+    # consegue gravar as rotas de novos restaurantes:
+    #   chown -R 100:101 traefik_dynamic
+    user: "100:101"
     volumes:
-      - ./.env:/root/.env
-      - ./static:/root/static
+      # Os montes anteriores para /root/.env e /root/static foram removidos: o WORKDIR
+      # passou a /app, e os ficheiros estáticos são copiados para a imagem no build.
+      # As variáveis de ambiente já entram por env_file.
       - ./traefik_dynamic:/traefik_dynamic
+      # Uploads têm de sobreviver a um rebuild da imagem.
+      - ./uploads:/app/static/uploads
     networks:
       - crm_default
 
