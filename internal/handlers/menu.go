@@ -42,11 +42,13 @@ func (h *Handler) GetPublicMenu(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"restaurante": gin.H{
-			"nome":                 t.Nome,
-			"slug":                 t.Slug,
-			"cartao_credito_ativo": t.CartaoCreditoAtivo,
-			"cartao_debito_ativo":  t.CartaoDebitoAtivo,
-			"dinheiro_ativo":       t.DinheiroAtivo,
+			"nome": t.Nome,
+			"slug": t.Slug,
+			// Métodos aceites na caixa. No MVP o serviço é sempre levantamento ao balcão
+			// com pagamento no local.
+			"dinheiro_ativo": t.DinheiroAtivo,
+			"cartao_ativo":   t.CartaoDebitoAtivo,
+			"tipo_servico":   "levantamento",
 		},
 		"itens": itens,
 	})

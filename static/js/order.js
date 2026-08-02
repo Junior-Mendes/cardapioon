@@ -1,20 +1,25 @@
-// Lógica do Rastreamento do Pedido do Cliente
+// Acompanhamento da encomenda pelo cliente.
+//
+// Depende de common.js (esc, formatCurrency, formatDateTime, showToast).
+//
+// O identificador na URL passou a ser o token opaco (?t=...). A versão anterior usava o
+// ID sequencial (?id=...), o que permitia a qualquer pessoa iterar de 1 a N e ler o nome,
+// o telefone e a forma de pagamento das encomendas de todos os restaurantes.
+
+'use strict';
 
 let pollingInterval = null;
+let numeroEncomenda = null;
 const urlParams = new URLSearchParams(window.location.search);
-const orderId = urlParams.get('id');
-
-function formatCurrency(val) {
-  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
-}
+const orderToken = urlParams.get('t');
 
 document.addEventListener('DOMContentLoaded', () => {
-  if (!orderId) {
+  if (!orderToken) {
     document.getElementById('order-tracking-card').innerHTML = `
       <div class="cart-empty">
         <div class="cart-empty-icon">❌</div>
-        <h3>Pedido não informado</h3>
-        <p>Por favor, use um link de pedido válido.</p>
+        <h3>Link incompleto</h3>
+        <p>Use o link de acompanhamento que recebeu ao fazer a encomenda.</p>
       </div>
     `;
     return;
@@ -27,10 +32,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadOrderDetails() {
   try {
-    const res = await fetch(`/api/pedidos/${orderId}`);
-    if (!res.ok) throw new Error('Pedido não localizado.');
+    const res = await fetch(`/api/encomendas/${encodeURIComponent(orderToken)}`);
+    if (!res.ok) throw new Error('Encomenda não encontrada.');
 
     const order = await res.json();
+    numeroEncomenda = order.numero;
     renderOrderDetails(order);
     updateTrackerStatus(order.status);
     
@@ -40,45 +46,44 @@ async function loadOrderDetails() {
     }
   } catch (err) {
     clearInterval(pollingInterval);
-    document.getElementById('order-tracking-card').innerHTML = `
+    const card = document.getElementById('order-tracking-card');
+    card.innerHTML = `
       <div class="cart-empty">
         <div class="cart-empty-icon">⚠️</div>
-        <h3>Erro ao rastrear pedido</h3>
-        <p>${err.message}</p>
-        <button class="btn btn-secondary" onclick="window.location.reload()" style="margin-top: 1rem;">Tentar Novamente</button>
+        <h3>Não foi possível acompanhar a encomenda</h3>
+        <p>${esc(err.message)}</p>
+        <button class="btn btn-secondary" id="btn-tentar-novamente" style="margin-top: 1rem;">Tentar novamente</button>
       </div>
     `;
+    // addEventListener em vez de onclick: a CSP não permite handlers inline.
+    card.querySelector('#btn-tentar-novamente')
+      .addEventListener('click', () => window.location.reload());
   }
 }
 
 function renderOrderDetails(order) {
   document.getElementById('track-rest-name').innerText = order.restaurante_nome;
-  document.getElementById('track-order-id').innerText = `#${order.id}`;
-  
-  const date = new Date(order.created_at);
-  document.getElementById('track-time').innerText = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) + ' - ' + date.toLocaleDateString('pt-BR');
+  document.getElementById('track-order-id').innerText = `#${order.numero}`;
+
+  document.getElementById('track-time').innerText = formatDateTime(order.created_at);
   
   document.getElementById('track-client-name').innerText = order.cliente_nome;
   document.getElementById('track-client-phone').innerText = order.cliente_telefone;
   
-  // Detalhes do Pagamento
-  let paymentText = '';
-  switch (order.forma_pagamento) {
-    case 'pix':
-      paymentText = 'PIX (Pago Online)';
-      break;
-    case 'cartao_credito':
-      paymentText = `Cartão de Crédito Online (Final ****${order.cartao_ultimos_digitos || '0000'})`;
-      break;
-    case 'retirada_dinheiro':
-      paymentText = 'Dinheiro na Retirada';
-      if (order.troco_para > 0) {
-        paymentText += ` (Levar troco para ${formatCurrency(order.troco_para)})`;
-      }
-      break;
-    case 'retirada_cartao':
-      paymentText = 'Cartão na Retirada';
-      break;
+  // Pagamento. No MVP é sempre na caixa, ao levantar; os valores antigos são mantidos
+  // para que encomendas anteriores continuem legíveis.
+  const ETIQUETAS = {
+    dinheiro: 'Dinheiro na caixa',
+    cartao: 'Cartão na caixa',
+    retirada_dinheiro: 'Dinheiro na caixa',
+    retirada_cartao: 'Cartão na caixa',
+    cartao_credito: 'Cartão (histórico)',
+    pix: 'Pix (histórico)',
+  };
+
+  let paymentText = ETIQUETAS[order.forma_pagamento] || order.forma_pagamento;
+  if (Number(order.troco_para) > 0) {
+    paymentText += ` — vai pagar com ${formatCurrency(order.troco_para)}`;
   }
   document.getElementById('track-payment').innerText = paymentText;
 
@@ -87,15 +92,24 @@ function renderOrderDetails(order) {
   container.innerHTML = order.itens.map(item => `
     <div style="display:flex; justify-content:space-between; margin-bottom:0.5rem; font-size:0.95rem;">
       <div>
-        <strong>${item.quantidade}x</strong> ${item.nome}
+        <strong>${esc(item.quantidade)}x</strong> ${esc(item.nome)}
       </div>
       <div>
-        ${formatCurrency(item.preco_unitario * item.quantidade)}
+        ${esc(formatCurrency(item.preco_unitario * item.quantidade))}
       </div>
     </div>
   `).join('');
 
   document.getElementById('track-total').innerText = formatCurrency(order.valor_total);
+
+  // O botão de voltar precisa do slug, que só chega com a encomenda.
+  const btnVoltar = document.getElementById('btn-back-menu');
+  if (btnVoltar && !btnVoltar.dataset.ligado) {
+    btnVoltar.dataset.ligado = '1';
+    btnVoltar.addEventListener('click', () => {
+      window.location.href = `/menu?tenant=${encodeURIComponent(order.restaurante_slug)}`;
+    });
+  }
 }
 
 // Atualiza o gráfico do progresso do pedido e o texto explicativo
@@ -109,10 +123,10 @@ function updateTrackerStatus(status) {
     document.getElementById('tracker-bar-fill').style.backgroundColor = 'var(--danger)';
     document.getElementById('track-status-badge').className = 'restaurant-badge';
     document.getElementById('track-status-badge').style.backgroundColor = 'var(--danger)';
-    document.getElementById('track-status-badge').innerText = 'PEDIDO CANCELADO';
+    document.getElementById('track-status-badge').innerText = 'ENCOMENDA CANCELADA';
     document.getElementById('track-status-desc').innerHTML = `
-      <div style="font-weight:700; font-size:1.1rem; color:var(--danger);">Seu pedido foi cancelado</div>
-      <p style="color:var(--text-muted); font-size:0.9rem; margin-top:0.25rem;">Entre em contato com o restaurante para mais informações.</p>
+      <div style="font-weight:700; font-size:1.1rem; color:var(--danger);">A sua encomenda foi cancelada</div>
+      <p style="color:var(--text-muted); font-size:0.9rem; margin-top:0.25rem;">Contacte o restaurante para mais informações.</p>
     `;
     
     // Desativa bolinhas de progresso
@@ -150,32 +164,32 @@ function updateTrackerStatus(status) {
   badge.style.backgroundColor = 'var(--primary)';
 
   if (status === 'pendente') {
-    badge.innerText = 'AGUARDANDO RESTAURANTE';
+    badge.innerText = 'À ESPERA DE CONFIRMAÇÃO';
     desc.innerHTML = `
-      <div style="font-weight:700; font-size:1.15rem; color:#fff;">Recebemos seu pedido!</div>
-      <p style="color:var(--text-muted); font-size:0.9rem; margin-top:0.25rem;">Aguardando a confirmação do restaurante para iniciar a preparação.</p>
+      <div style="font-weight:700; font-size:1.15rem; color:#fff;">Recebemos a sua encomenda!</div>
+      <p style="color:var(--text-muted); font-size:0.9rem; margin-top:0.25rem;">O restaurante vai confirmar e começar a preparar.</p>
     `;
   } else if (status === 'preparando') {
     badge.innerText = 'EM PREPARAÇÃO';
     desc.innerHTML = `
-      <div style="font-weight:700; font-size:1.15rem; color:var(--warning);">Seu pedido está sendo preparado!</div>
-      <p style="color:var(--text-muted); font-size:0.9rem; margin-top:0.25rem;">Nossa equipe de cozinha está preparando seu prato com todo capricho.</p>
+      <div style="font-weight:700; font-size:1.15rem; color:var(--warning);">A sua encomenda está a ser preparada!</div>
+      <p style="color:var(--text-muted); font-size:0.9rem; margin-top:0.25rem;">A cozinha já está a trabalhar no seu pedido.</p>
     `;
   } else if (status === 'pronto') {
-    badge.innerText = 'DISPONÍVEL PARA RETIRADA';
+    badge.innerText = 'PRONTA PARA LEVANTAR';
     badge.style.backgroundColor = 'var(--success)';
     desc.innerHTML = `
-      <div style="font-weight:800; font-size:1.25rem; color:var(--success);" class="anim-pulse">✓ Pedido pronto para retirada!</div>
+      <div style="font-weight:800; font-size:1.25rem; color:var(--success);" class="anim-pulse">✓ A sua encomenda está pronta!</div>
       <p style="color:#fff; font-size:0.95rem; margin-top:0.5rem; font-weight:500;">
-        Você já pode se dirigir ao balcão do restaurante para retirar seu pedido. Informe o código <strong>#${orderId}</strong>.
+        Pode dirigir-se ao balcão para levantar. Indique o número <strong>#${esc(numeroEncomenda)}</strong>.
       </p>
     `;
   } else if (status === 'finalizado') {
-    badge.innerText = 'RETIRADO / FINALIZADO';
+    badge.innerText = 'LEVANTADA';
     badge.style.backgroundColor = 'var(--info)';
     desc.innerHTML = `
-      <div style="font-weight:700; font-size:1.15rem; color:var(--info);">Pedido finalizado!</div>
-      <p style="color:var(--text-muted); font-size:0.9rem; margin-top:0.25rem;">Obrigado pela preferência e bom apetite!</p>
+      <div style="font-weight:700; font-size:1.15rem; color:var(--info);">Encomenda concluída!</div>
+      <p style="color:var(--text-muted); font-size:0.9rem; margin-top:0.25rem;">Obrigado e bom apetite!</p>
     `;
   }
 }

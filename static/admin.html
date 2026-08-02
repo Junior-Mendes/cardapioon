@@ -31,7 +31,10 @@
           <input type="password" id="login-password" class="form-control" placeholder="Sua senha" required>
         </div>
         <button type="submit" class="btn btn-primary" style="width:100%; margin-top:1rem;">Acessar Painel</button>
-      </form>
+        <p style="text-align:center; margin-top:1rem; font-size:0.85rem;">
+              <a href="#" id="link-esqueci-senha" style="color:var(--text-muted);">Esqueceu-se da senha?</a>
+            </p>
+          </form>
       
       <div style="margin-top: 1.5rem; text-align: center; font-size: 0.85rem;">
         <span style="color:var(--text-muted);">Ainda não tem cadastro?</span>
@@ -86,9 +89,9 @@
         <div class="admin-header">
           <div class="admin-title">
             <h1>Gestão de Pedidos</h1>
-            <p>Gerencie as solicitações de retirada recebidas em tempo real</p>
+            <p>Acompanhe as encomendas para levantamento em tempo real</p>
           </div>
-          <button class="btn btn-secondary" onclick="loadOrders()"><span style="font-size:1.1rem;">🔄</span> Atualizar</button>
+          <button class="btn btn-secondary" id="btn-refresh-orders"><span style="font-size:1.1rem;">🔄</span> Atualizar</button>
         </div>
 
         <!-- Cards de Métricas -->
@@ -134,10 +137,10 @@
             </div>
           </div>
 
-          <!-- Coluna 3: Pronto para Retirada -->
+          <!-- Coluna 3: Prontas para levantar -->
           <div class="board-column glass" style="background: rgba(46, 213, 115, 0.03); border-color: rgba(46, 213, 115, 0.2);">
             <div class="column-header">
-              <span class="column-title" style="color:var(--success);">✓ Pronto P/ Retirada</span>
+              <span class="column-title" style="color:var(--success);">✓ Prontas</span>
               <span class="column-count" id="count-pronto" style="background:var(--success); color:#fff;">0</span>
             </div>
             <div class="orders-list" id="list-pronto">
@@ -185,37 +188,15 @@
         <div class="glass" style="max-width: 600px; padding: 2rem; border-radius: var(--radius-md);">
           <form id="payments-form">
             
-            <div class="switch-control">
-              <div>
-                <strong style="display:block;">Pagamento via PIX (Online)</strong>
-                <span style="font-size:0.8rem; color:var(--text-muted);">Exibe um QR Code simulado no fechamento da compra</span>
-              </div>
-              <label class="switch">
-                <input type="checkbox" id="config-pix-ativo">
-                <span class="slider"></span>
-              </label>
-            </div>
-
-            <div id="pix-key-wrapper" class="form-group" style="display:none; padding-left: 1rem; border-left: 3px solid var(--primary); margin-bottom: 2rem;">
-              <label for="config-pix-chave">Chave PIX do Restaurante</label>
-              <input type="text" id="config-pix-chave" class="form-control" placeholder="CNPJ, Celular, E-mail ou Chave Aleatória">
-            </div>
+            <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:1.5rem;">
+              Neste momento as encomendas são sempre para <strong>levantamento ao balcão</strong>,
+              com pagamento na caixa. Indique o que aceita receber.
+            </p>
 
             <div class="switch-control">
               <div>
-                <strong style="display:block;">Cartão de Crédito (Online)</strong>
-                <span style="font-size:0.8rem; color:var(--text-muted);">Habilita o simulador de dados de cartão de crédito no checkout</span>
-              </div>
-              <label class="switch">
-                <input type="checkbox" id="config-credito-ativo">
-                <span class="slider"></span>
-              </label>
-            </div>
-
-            <div class="switch-control">
-              <div>
-                <strong style="display:block;">Dinheiro (na Retirada)</strong>
-                <span style="font-size:0.8rem; color:var(--text-muted);">Permite pagar em dinheiro no balcão e solicitar troco</span>
+                <strong style="display:block;">Dinheiro na caixa</strong>
+                <span style="font-size:0.8rem; color:var(--text-muted);">O cliente pode indicar com que valor vai pagar, para preparar o troco</span>
               </div>
               <label class="switch">
                 <input type="checkbox" id="config-dinheiro-ativo">
@@ -225,16 +206,16 @@
 
             <div class="switch-control">
               <div>
-                <strong style="display:block;">Cartão de Débito/Crédito (na Retirada)</strong>
-                <span style="font-size:0.8rem; color:var(--text-muted);">Informa que o pagamento será feito na maquininha no momento da entrega/retirada</span>
+                <strong style="display:block;">Cartão na caixa</strong>
+                <span style="font-size:0.8rem; color:var(--text-muted);">Pagamento no terminal físico do restaurante ao levantar</span>
               </div>
               <label class="switch">
-                <input type="checkbox" id="config-debito-ativo">
+                <input type="checkbox" id="config-cartao-ativo">
                 <span class="slider"></span>
               </label>
             </div>
 
-            <button type="submit" class="btn btn-primary" style="margin-top: 1.5rem; width: 100%;">Salvar Métodos de Pagamento</button>
+            <button type="submit" class="btn btn-primary" style="margin-top: 1.5rem; width: 100%;">Guardar métodos de pagamento</button>
           </form>
         </div>
       </section>
@@ -284,18 +265,30 @@
             </div>
 
             <div class="form-group" style="margin-top: 1.5rem;">
-              <label for="config-rest-domain">Domínio Personalizado (DNS)</label>
-              <div style="display:flex; gap:0.5rem; align-items:center;">
-                <input type="text" id="config-rest-domain" class="form-control" placeholder="Ex: www.pizzariadojoao.com.br" style="flex:1;">
-                <button type="button" class="btn btn-secondary" id="btn-check-dns" style="padding:0.6rem 1rem; font-size:0.85rem; white-space:nowrap;">Testar Conexão</button>
+              <label for="config-rest-nif">NIF do estabelecimento</label>
+              <input type="text" id="config-rest-nif" class="form-control" placeholder="Ex.: 501442600" inputmode="numeric" maxlength="11">
+              <span style="font-size:0.8rem; color:var(--text-muted); display:block; margin-top:0.35rem;">
+                Necessário para a facturação da subscrição.
+              </span>
+            </div>
+
+            <div class="form-group" style="margin-top: 1.5rem;">
+              <label for="config-rest-domain">Domínio próprio (opcional)</label>
+              <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                <input type="text" id="config-rest-domain" class="form-control" placeholder="Ex.: www.tascadobairro.pt" style="flex:1; min-width:200px;">
+                <button type="button" class="btn btn-secondary" id="btn-save-domain" style="padding:0.6rem 1rem; font-size:0.85rem; white-space:nowrap;">Guardar domínio</button>
+                <button type="button" class="btn btn-secondary" id="btn-check-dns" style="padding:0.6rem 1rem; font-size:0.85rem; white-space:nowrap;">Verificar</button>
               </div>
               <div id="dns-status-wrapper" style="margin-top:0.75rem; display:none; padding:0.75rem; border-radius:var(--radius-sm); font-size:0.85rem;">
                 <!-- Status injetado via JS -->
               </div>
               <span style="font-size:0.8rem; color:var(--text-muted); display:block; margin-top:0.5rem;">
-                Aponte o DNS do seu domínio próprio na sua registradora (ex: Registro.br) usando:
-                <br>• Tipo <strong>CNAME</strong> com Nome <code>www</code> apontando para <code id="lbl-main-domain">deliverysistema.com.br</code>
-                <br>• Ou tipo <strong>A</strong> com Nome <code>@</code> (vazio) apontando para o IP de nosso servidor.
+                Ao guardar, mostramos um registo <strong>TXT</strong> que tem de criar no seu
+                registrador para provarmos que o domínio é seu. Só depois de verificado é que
+                passamos a servir o seu menu nesse endereço, com certificado SSL automático.
+                <br>Para encaminhar o tráfego use <strong>CNAME</strong> para
+                <code id="lbl-main-domain">exemplo.pt</code>, ou um registo <strong>A</strong>
+                para o IP do servidor se o seu registrador não permitir CNAME na raiz.
               </span>
             </div>
 
@@ -380,7 +373,7 @@
         </div>
 
         <div style="display:flex; justify-content:flex-end; gap:0.75rem; border-top:1px solid var(--border-color); padding-top:1.5rem;">
-          <button type="button" class="btn btn-secondary" onclick="closeItemModal()">Cancelar</button>
+          <button type="button" class="btn btn-secondary" id="item-modal-cancel-btn">Cancelar</button>
           <button type="submit" class="btn btn-primary">Salvar Item</button>
         </div>
       </form>

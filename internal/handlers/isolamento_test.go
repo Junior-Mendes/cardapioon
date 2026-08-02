@@ -837,7 +837,70 @@ func TestUpdateConfigParcialNaoDesactivaPagamentos(t *testing.T) {
 		t.Error("pagamento em dinheiro foi desactivado por um payload parcial")
 	}
 	if !t2.CartaoDebitoAtivo {
-		t.Error("pagamento por multibanco foi desactivado por um payload parcial")
+		t.Error("pagamento com cartão foi desactivado por um payload parcial")
+	}
+}
+
+// TestNaoPodeDesactivarTodosOsPagamentos: sem nenhum método activo o restaurante receberia
+// encomendas que não consegue cobrar na caixa.
+func TestNaoPodeDesactivarTodosOsPagamentos(t *testing.T) {
+	amb := montarAmbiente(t)
+
+	rec := amb.fazer(pedidoHTTP{
+		metodo: "PUT", rota: "/api/admin/config",
+		corpo: `{"dinheiro_ativo":false,"cartao_ativo":false}`,
+		token: amb.tokenDe(amb.userA),
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status %d, esperado 400: %s", rec.Code, rec.Body.String())
+	}
+
+	var t2 models.Tenant
+	if err := amb.gdb.First(&t2, amb.tenantA.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !t2.DinheiroAtivo || !t2.CartaoDebitoAtivo {
+		t.Error("os métodos de pagamento foram alterados apesar da rejeição")
+	}
+}
+
+// TestPagamentoOnlineNaoEhAceite documenta o âmbito do MVP: só pagamento na caixa.
+func TestPagamentoOnlineNaoEhAceite(t *testing.T) {
+	amb := montarAmbiente(t)
+
+	for _, metodo := range []string{"pix", "cartao_credito", "tpa", "mbway", "multibanco"} {
+		corpo := fmt.Sprintf(`{
+			"cliente_nome":"Cliente",
+			"cliente_telefone":"912345678",
+			"forma_pagamento":%q,
+			"itens":[{"menu_item_id":%d,"quantidade":1}]
+		}`, metodo, amb.itemA.ID)
+
+		rec := amb.fazer(pedidoHTTP{
+			metodo: "POST", rota: "/api/pedidos", corpo: corpo,
+			host: amb.tenantA.Slug + "." + dominioTeste,
+		})
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("método %q aceite: status %d: %s", metodo, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Os dois métodos do MVP funcionam.
+	for _, metodo := range []string{"dinheiro", "cartao"} {
+		corpo := fmt.Sprintf(`{
+			"cliente_nome":"Cliente",
+			"cliente_telefone":"912345678",
+			"forma_pagamento":%q,
+			"itens":[{"menu_item_id":%d,"quantidade":1}]
+		}`, metodo, amb.itemA.ID)
+
+		rec := amb.fazer(pedidoHTTP{
+			metodo: "POST", rota: "/api/pedidos", corpo: corpo,
+			host: amb.tenantA.Slug + "." + dominioTeste,
+		})
+		if rec.Code != http.StatusCreated {
+			t.Errorf("método %q rejeitado: status %d: %s", metodo, rec.Code, rec.Body.String())
+		}
 	}
 }
 

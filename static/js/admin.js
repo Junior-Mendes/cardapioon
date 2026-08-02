@@ -10,8 +10,8 @@
 //     Sem isso, um produto chamado "<img onerror=...>" executava no painel do lojista.
 //   - Handlers ligados por addEventListener em vez de onclick inline, porque a CSP não
 //     permite 'unsafe-inline' em script-src.
-//   - Pix removido (não existe em Portugal); pagamentos passam a dinheiro, multibanco na
-//     entrega e cartão online.
+//   - Pix removido (não existe em Portugal). O MVP é levantamento ao balcão com pagamento
+//     na caixa: dinheiro ou cartão no terminal, sem pagamento na aplicação.
 //   - Domínio personalizado passa a exigir verificação de propriedade por registo TXT.
 
 'use strict';
@@ -166,15 +166,16 @@ function renderMetrics() {
   document.getElementById('metric-total-orders').innerText = orders.length;
 }
 
+// Etiquetas de pagamento. No MVP tudo é pago na caixa ao levantar; os valores antigos
+// continuam mapeados para que o histórico de encomendas permaneça legível.
 const ETIQUETAS_PAGAMENTO = {
-  dinheiro: 'Dinheiro na entrega',
-  tpa: 'Multibanco na entrega',
-  cartao: 'Cartão online',
-  // Valores históricos, para que encomendas antigas continuem legíveis.
-  retirada_dinheiro: 'Dinheiro (histórico)',
-  retirada_cartao: 'Multibanco (histórico)',
-  cartao_credito: 'Cartão (histórico)',
+  dinheiro: 'Dinheiro na caixa',
+  cartao: 'Cartão na caixa',
+  retirada_dinheiro: 'Dinheiro na caixa',
+  retirada_cartao: 'Cartão na caixa',
+  cartao_credito: 'Cartão online (histórico)',
   pix: 'Pix (histórico)',
+  tpa: 'Cartão na caixa',
 };
 
 function renderOrdersBoard() {
@@ -462,8 +463,7 @@ async function loadPaymentsConfig() {
   if (!Sessao.temSessao()) return;
   try {
     const config = await api('/api/admin/config');
-    definirCheck('config-credito-ativo', config.cartao_credito_ativo);
-    definirCheck('config-debito-ativo', config.cartao_debito_ativo);
+    definirCheck('config-cartao-ativo', config.cartao_ativo);
     definirCheck('config-dinheiro-ativo', config.dinheiro_ativo);
   } catch (err) {
     if (err.status === 403) return;
@@ -485,12 +485,11 @@ async function handleSavePayments(e) {
   e.preventDefault();
 
   const payload = {
-    cartao_credito_ativo: lerCheck('config-credito-ativo'),
-    cartao_debito_ativo: lerCheck('config-debito-ativo'),
     dinheiro_ativo: lerCheck('config-dinheiro-ativo'),
+    cartao_ativo: lerCheck('config-cartao-ativo'),
   };
 
-  if (!payload.cartao_credito_ativo && !payload.cartao_debito_ativo && !payload.dinheiro_ativo) {
+  if (!payload.dinheiro_ativo && !payload.cartao_ativo) {
     showToast('Active pelo menos um método de pagamento, ou não poderá receber encomendas.', 'error');
     return;
   }
@@ -782,6 +781,8 @@ function setupEventListeners() {
   ligar('item-desconto-checkbox', 'change', (e) => toggleDiscountInput(e.target));
 
   ligar('payments-form', 'submit', handleSavePayments);
+  ligar('btn-refresh-orders', 'click', loadOrders);
+  ligar('item-modal-cancel-btn', 'click', closeItemModal);
 
   ligar('btn-add-user', 'click', openUserModal);
   ligar('user-modal-close-btn', 'click', closeUserModal);

@@ -1,30 +1,24 @@
-// Lógica do Cardápio Online & Checkout do Cliente
+// Menu público e checkout do cliente.
+//
+// Depende de common.js (esc, api, formatCurrency, showToast, uuid).
+//
+// Âmbito do MVP: levantamento ao balcão com pagamento na caixa. Não há entrega nem
+// pagamento na aplicação, pelo que o simulador de Pix e o formulário de cartão de crédito
+// da versão anterior foram removidos — ambos davam ao cliente a impressão de ter pago
+// quando nenhum pagamento acontecia.
+
+'use strict';
 
 let menuData = null;
 let cart = [];
 let activeCategory = 'all';
 let currentStep = 1;
 
-// Utilitário para formatar moeda brasileira
-function formatCurrency(val) {
-  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
-}
-
-// Utilitário para mostrar Toasts
-function showToast(message, type = 'info') {
-  const container = document.getElementById('toast-container');
-  const toast = document.createElement('div');
-  toast.className = `toast toast-${type} glass`;
-  toast.innerHTML = `<span>${message}</span>`;
-  container.appendChild(toast);
-  
-  setTimeout(() => toast.classList.add('show'), 50);
-  
-  setTimeout(() => {
-    toast.classList.remove('show');
-    setTimeout(() => toast.remove(), 300);
-  }, 3500);
-}
+// Chave de idempotência da encomenda em curso.
+//
+// Gerada ao abrir o checkout e reutilizada em cada tentativa de submissão, para que um
+// duplo-toque ou um retry após timeout não crie duas encomendas.
+let chaveIdempotencia = null;
 
 // Obtém o slug do restaurante da URL (ex: ?tenant=bella-italia)
 const urlParams = new URLSearchParams(window.location.search);
@@ -99,10 +93,16 @@ function renderCategories() {
 
   const bar = document.getElementById('categories-bar');
   bar.innerHTML = categories.map(cat => {
-    const label = cat === 'all' ? 'Todos os Pratos' : cat;
+    const label = cat === 'all' ? 'Todos os pratos' : cat;
     const activeClass = cat === activeCategory ? 'active' : '';
-    return `<div class="category-tab ${activeClass}" onclick="filterCategory('${cat}')">${label}</div>`;
+    // data-categoria em vez de onclick: a CSP não permite handlers inline, e o nome da
+    // categoria vem do lojista, pelo que interpolá-lo em JavaScript seria injecção.
+    return `<div class="category-tab ${activeClass}" data-categoria="${esc(cat)}">${esc(label)}</div>`;
   }).join('');
+
+  bar.querySelectorAll('[data-categoria]').forEach(tab => {
+    tab.addEventListener('click', () => filterCategory(tab.dataset.categoria));
+  });
 }
 
 // Filtra produtos pela categoria
@@ -126,18 +126,19 @@ function renderProducts() {
 
   container.innerHTML = filtered.map(item => {
     const hasDiscount = item.desconto_ativo && item.preco_desconto > 0;
-    const finalPrice = hasDiscount ? item.preco_desconto : item.preco;
-    
-    const priceDisplay = hasDiscount 
-      ? `<span class="prod-original-price slashed">${formatCurrency(item.preco)}</span>
-         <span class="prod-discount-price">${formatCurrency(item.preco_desconto)}</span>`
-      : `<span class="prod-original-price">${formatCurrency(item.preco)}</span>`;
 
-    const discountBadge = hasDiscount 
+    const priceDisplay = hasDiscount
+      ? `<span class="prod-original-price slashed">${esc(formatCurrency(item.preco))}</span>
+         <span class="prod-discount-price">${esc(formatCurrency(item.preco_desconto))}</span>`
+      : `<span class="prod-original-price">${esc(formatCurrency(item.preco))}</span>`;
+
+    const discountBadge = hasDiscount
       ? `<div class="discount-tag">-${Math.round((1 - item.preco_desconto / item.preco) * 100)}%</div>`
       : '';
 
-    const imgUrl = item.imagem_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500';
+    // escAttr remove parênteses: o URL entra num url(...) de CSS e sem isso poderia
+    // fechá-lo e injectar mais estilos.
+    const imgUrl = escAttr(item.imagem_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500');
 
     return `
       <div class="product-card glass">
@@ -146,19 +147,24 @@ function renderProducts() {
         </div>
         <div class="product-details">
           <div class="product-info">
-            <h3 class="product-name">${item.nome}</h3>
-            <p class="product-desc">${item.descricao || ''}</p>
+            <h3 class="product-name">${esc(item.nome)}</h3>
+            <p class="product-desc">${esc(item.descricao || '')}</p>
           </div>
           <div class="product-footer">
             <div class="product-price-col">
               ${priceDisplay}
             </div>
-            <button class="add-btn" onclick="addToCart(${item.id})">+</button>
+            <button class="add-btn" data-adicionar="${esc(item.id)}">+</button>
           </div>
         </div>
       </div>
     `;
   }).join('');
+
+  // Handlers por addEventListener: a CSP não permite onclick inline.
+  container.querySelectorAll('[data-adicionar]').forEach(b => {
+    b.addEventListener('click', () => addToCart(Number(b.dataset.adicionar)));
+  });
 }
 
 // Adiciona item ao carrinho
@@ -235,16 +241,22 @@ function updateCartUI() {
   itemsContainer.innerHTML = cart.map(item => `
     <div class="cart-item">
       <div class="cart-item-details">
-        <div class="cart-item-name">${item.nome}</div>
-        <div class="cart-item-price">${formatCurrency(item.preco)}</div>
+        <div class="cart-item-name">${esc(item.nome)}</div>
+        <div class="cart-item-price">${esc(formatCurrency(item.preco))}</div>
       </div>
       <div class="cart-item-qty">
-        <button class="qty-btn" onclick="updateQty(${item.id}, -1)">-</button>
-        <span>${item.qty}</span>
-        <button class="qty-btn" onclick="updateQty(${item.id}, 1)">+</button>
+        <button class="qty-btn" data-qty="${esc(item.id)}" data-delta="-1">-</button>
+        <span>${esc(item.qty)}</span>
+        <button class="qty-btn" data-qty="${esc(item.id)}" data-delta="1">+</button>
       </div>
     </div>
   `).join('');
+
+  itemsContainer.querySelectorAll('[data-qty]').forEach(b => {
+    b.addEventListener('click', () =>
+      updateQty(Number(b.dataset.qty), Number(b.dataset.delta))
+    );
+  });
 
   document.getElementById('subtotal-val').innerText = formatCurrency(totalValue);
   document.getElementById('total-val').innerText = formatCurrency(totalValue);
@@ -253,6 +265,8 @@ function updateCartUI() {
 // Controla o fluxo de Checkout
 function openCheckoutModal() {
   if (cart.length === 0) return;
+  // Uma chave por tentativa de checkout, reutilizada em todos os retries dessa tentativa.
+  chaveIdempotencia = uuid();
   document.getElementById('checkout-modal').classList.add('open');
   renderPaymentOptions();
   goToStep(1);
@@ -280,7 +294,7 @@ function goToStep(step) {
   
   // Controla botões de navegação
   document.getElementById('checkout-back').style.display = step === 1 ? 'none' : 'inline-flex';
-  document.getElementById('checkout-next').innerText = step === 3 ? 'Finalizar Pedido' : 'Continuar';
+  document.getElementById('checkout-next').innerText = step === 3 ? 'Finalizar encomenda' : 'Continuar';
 }
 
 function handleNextStep() {
@@ -289,7 +303,7 @@ function handleNextStep() {
     const nome = document.getElementById('checkout-nome').value.trim();
     const tel = document.getElementById('checkout-telefone').value.trim();
     if (!nome || !tel) {
-      showToast('Por favor, preencha seu nome e telefone.', 'error');
+      showToast('Indique o seu nome e telemóvel.', 'error');
       return;
     }
     goToStep(2);
@@ -300,7 +314,7 @@ function handleNextStep() {
       showToast('Escolha um método de pagamento.', 'error');
       return;
     }
-    setupSimulationScreen(selected.value);
+    setupConfirmationScreen(selected.value);
     goToStep(3);
   } else if (currentStep === 3) {
     // Processa o pedido e envia para o back-end
@@ -314,318 +328,186 @@ function handleBackStep() {
   }
 }
 
-// Renderiza as opções de pagamento ativas do lojista
+// renderPaymentOptions mostra os métodos aceites na caixa.
+//
+// No MVP não existe pagamento na aplicação: ambas as opções são pagas no balcão ao
+// levantar a encomenda.
 function renderPaymentOptions() {
   const rest = menuData.restaurante;
   const container = document.getElementById('payment-options-container');
-  
-  let options = [];
-  
-  if (rest.pix_ativo) {
-    options.push(`
-      <label class="payment-label" onclick="selectRadio(this)">
-        <input type="radio" name="payment_method" value="pix">
-        <div>
-          <div style="font-weight: 600;">PIX (Online)</div>
-          <div class="payment-info-text">Pague na hora e seu pedido é confirmado instantaneamente</div>
-        </div>
-      </label>
-    `);
-  }
-  
-  if (rest.cartao_credito_ativo) {
-    options.push(`
-      <label class="payment-label" onclick="selectRadio(this)">
-        <input type="radio" name="payment_method" value="cartao_credito">
-        <div>
-          <div style="font-weight: 600;">Cartão de Crédito (Online)</div>
-          <div class="payment-info-text">Pague online com cartão de crédito via plataforma simulada</div>
-        </div>
-      </label>
-    `);
-  }
+
+  const opcoes = [];
 
   if (rest.dinheiro_ativo) {
-    options.push(`
-      <label class="payment-label" onclick="selectRadio(this)">
-        <input type="radio" name="payment_method" value="retirada_dinheiro">
+    opcoes.push(`
+      <label class="payment-label">
+        <input type="radio" name="payment_method" value="dinheiro">
         <div>
-          <div style="font-weight: 600;">Dinheiro (na Retirada)</div>
-          <div class="payment-info-text">Pague em dinheiro no balcão ao retirar seu pedido</div>
+          <div style="font-weight: 600;">Dinheiro na caixa</div>
+          <div class="payment-info-text">Paga em dinheiro quando levantar a encomenda</div>
         </div>
       </label>
     `);
   }
 
-  if (rest.cartao_debito_ativo) {
-    options.push(`
-      <label class="payment-label" onclick="selectRadio(this)">
-        <input type="radio" name="payment_method" value="retirada_cartao">
+  if (rest.cartao_ativo) {
+    opcoes.push(`
+      <label class="payment-label">
+        <input type="radio" name="payment_method" value="cartao">
         <div>
-          <div style="font-weight: 600;">Cartão de Débito/Crédito (na Retirada)</div>
-          <div class="payment-info-text">Pague na maquininha física do restaurante na retirada</div>
+          <div style="font-weight: 600;">Cartão na caixa</div>
+          <div class="payment-info-text">Paga com cartão no terminal do restaurante</div>
         </div>
       </label>
     `);
   }
 
-  if (options.length === 0) {
-    container.innerHTML = `<p style="color:var(--danger)">Erro: O restaurante não configurou nenhum método de pagamento ativo!</p>`;
+  if (opcoes.length === 0) {
+    container.innerHTML =
+      '<p style="color:var(--danger)">Este restaurante ainda não configurou métodos de pagamento. Não é possível encomendar.</p>';
     document.getElementById('checkout-next').disabled = true;
-  } else {
-    container.innerHTML = options.join('');
-    document.getElementById('checkout-next').disabled = false;
+    return;
+  }
+
+  document.getElementById('checkout-next').disabled = false;
+  container.innerHTML = opcoes.join('');
+
+  // Marca visualmente a opção escolhida sem depender de onclick inline.
+  container.querySelectorAll('.payment-label').forEach((label) => {
+    label.addEventListener('click', () => {
+      container.querySelectorAll('.payment-label').forEach((l) => l.classList.remove('selected'));
+      label.classList.add('selected');
+      const radio = label.querySelector('input[type="radio"]');
+      if (radio) radio.checked = true;
+    });
+  });
+}
+
+// setupConfirmationScreen monta o passo 3: confirmação do levantamento.
+//
+// Substitui o simulador de pagamento da versão anterior. Não há nada a processar aqui —
+// o pagamento acontece fisicamente na caixa.
+function setupConfirmationScreen(metodo) {
+  const container = document.getElementById('step-3-sim');
+  const total = cart.reduce((soma, i) => soma + i.preco * i.qty, 0);
+
+  const blocoTroco =
+    metodo === 'dinheiro'
+      ? `
+      <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border-color);">
+        <label style="font-size:0.85rem; font-weight:600; display:block; margin-bottom:0.5rem;">Vai precisar de troco?</label>
+        <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+          <input type="checkbox" id="dinheiro-troco-checkbox" style="width:18px; height:18px; accent-color:var(--primary);">
+          <span>Sim, indicar o valor com que vou pagar</span>
+        </label>
+        <div id="troco-input-wrapper" style="margin-top:0.75rem; display:none;">
+          <input type="number" class="form-control" id="dinheiro-troco-val"
+                 placeholder="Ex.: 20" step="0.01" min="0" inputmode="decimal">
+          <p style="font-size:0.75rem; color:var(--text-muted); margin-top:0.35rem;">
+            Ajuda a caixa a preparar o troco. Não é obrigatório.
+          </p>
+        </div>
+      </div>`
+      : '';
+
+  const comoPaga =
+    metodo === 'dinheiro'
+      ? 'Paga em <strong>dinheiro</strong> na caixa.'
+      : 'Paga com <strong>cartão</strong> no terminal da caixa.';
+
+  container.innerHTML = `
+    <div class="pix-container anim-fade">
+      <h4 style="font-weight:700;">Confirmar encomenda</h4>
+      <p style="font-size:0.9rem; color:var(--text-muted); margin:0.75rem 0;">
+        Encomenda para <strong>levantamento ao balcão</strong>, no valor de
+        <strong>${esc(formatCurrency(total))}</strong>. ${comoPaga}
+      </p>
+      <p style="font-size:0.85rem; color:var(--text-muted);">
+        Vai receber um link para acompanhar a preparação. Levante quando estiver pronta.
+      </p>
+      ${blocoTroco}
+    </div>
+  `;
+
+  const cb = document.getElementById('dinheiro-troco-checkbox');
+  if (cb) {
+    cb.addEventListener('change', () => {
+      document.getElementById('troco-input-wrapper').style.display = cb.checked ? 'block' : 'none';
+    });
   }
 }
 
-function selectRadio(label) {
-  document.querySelectorAll('.payment-label').forEach(l => l.classList.remove('selected'));
-  label.classList.add('selected');
-  const input = label.querySelector('input[type="radio"]');
-  if (input) input.checked = true;
-}
-
-// Configura a tela de simulação de pagamento (Passo 3)
-function setupSimulationScreen(method) {
-  const container = document.getElementById('simulation-content');
-  const totalVal = cart.reduce((sum, i) => sum + (i.preco * i.qty), 0);
-
-  if (method === 'pix') {
-    container.innerHTML = `
-      <div class="pix-container anim-fade">
-        <h4 style="font-weight:700;">Simulador de Pagamento PIX</h4>
-        <p style="font-size:0.9rem; text-align:center; color:var(--text-muted);">
-          Escaneie o QR Code abaixo ou copie a chave Pix Copia e Cola para pagar o valor de <strong>${formatCurrency(totalVal)}</strong>.
-        </p>
-        <div class="pix-qr">
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=00020101021226850014br.gov.bcb.pix2563${encodeURIComponent(menuData.restaurante.pix_chave)}5405${totalVal.toFixed(2)}5802BR" style="width:100%;" alt="QR Code PIX">
-        </div>
-        <div class="pix-key-box">
-          <input type="text" readonly class="form-control" id="pix-copy-key" value="${menuData.restaurante.pix_chave}">
-          <button class="btn btn-primary" onclick="copyPixKey()">Copiar</button>
-        </div>
-        <p style="font-size:0.8rem; color:var(--success); font-weight:600;">✓ PIX Simulador ativado. Chave do lojista: ${menuData.restaurante.pix_chave}</p>
-      </div>
-    `;
-  } else if (method === 'cartao_credito') {
-    container.innerHTML = `
-      <div class="anim-fade" style="display:flex; flex-direction:column; align-items:center;">
-        <h4 style="font-weight:700;">Pagamento com Cartão de Crédito</h4>
-        
-        <!-- Cartão 3D Interativo -->
-        <div class="flip-card" id="credit-card-preview">
-          <div class="flip-card-inner">
-            <div class="card-front">
-              <div class="card-chip"></div>
-              <div class="card-number" id="card-preview-number">•••• •••• •••• ••••</div>
-              <div class="card-row">
-                <div>
-                  <div class="card-label">Titular</div>
-                  <div class="card-holder" id="card-preview-name">NOME COMPLETO</div>
-                </div>
-                <div>
-                  <div class="card-label">Validade</div>
-                  <div class="card-expiry" id="card-preview-expiry">MM/AA</div>
-                </div>
-              </div>
-            </div>
-            <div class="card-back">
-              <div class="card-stripe"></div>
-              <div class="card-signature" id="card-preview-cvv">•••</div>
-            </div>
-          </div>
-        </div>
-
-        <div style="width:100%; max-width:320px; display:flex; flex-direction:column; gap:0.75rem;">
-          <input type="text" class="form-control" id="cc-number" placeholder="Número do Cartão (16 dígitos)" maxlength="19" oninput="formatCC(this)" onfocus="flipCard(false)">
-          <input type="text" class="form-control" id="cc-name" placeholder="Nome Impresso no Cartão" oninput="updateCCName(this)" onfocus="flipCard(false)">
-          <div style="display:flex; gap:0.5rem;">
-            <input type="text" class="form-control" id="cc-expiry" placeholder="MM/AA" maxlength="5" oninput="formatExpiry(this)" onfocus="flipCard(false)">
-            <input type="text" class="form-control" id="cc-cvv" placeholder="CVV" maxlength="4" oninput="updateCVV(this)" onfocus="flipCard(true)" onblur="flipCard(false)">
-          </div>
-        </div>
-      </div>
-    `;
-  } else if (method === 'retirada_dinheiro') {
-    container.innerHTML = `
-      <div class="pix-container anim-fade">
-        <h4 style="font-weight:700;">Pagamento em Dinheiro na Retirada</h4>
-        <p style="font-size:0.9rem; text-align:center; color:var(--text-muted);">
-          Você efetuará o pagamento de <strong>${formatCurrency(totalVal)}</strong> no balcão do restaurante.
-        </p>
-        <div style="width:100%; max-width:300px; text-align:left;">
-          <label style="font-size:0.85rem; font-weight:600; display:block; margin-bottom:0.5rem;">Precisa de troco?</label>
-          <div style="display:flex; gap:0.5rem; align-items:center;">
-            <input type="checkbox" id="dinheiro-troco-checkbox" onchange="toggleTrocoInput(this)" style="width:18px; height:18px; accent-color:var(--primary);">
-            <span>Sim, preciso de troco</span>
-          </div>
-          <div id="troco-input-wrapper" style="margin-top:0.75rem; display:none;">
-            <input type="number" class="form-control" id="dinheiro-troco-val" placeholder="Troco para quanto? (ex: 50 ou 100)" step="0.01">
-          </div>
-        </div>
-      </div>
-    `;
-  } else if (method === 'retirada_cartao') {
-    container.innerHTML = `
-      <div class="pix-container anim-fade">
-        <h4 style="font-weight:700;">Pagamento com Cartão na Retirada</h4>
-        <p style="font-size:0.9rem; text-align:center; color:var(--text-muted);">
-          O motoboy ou atendente levará a maquininha física até você no momento da retirada.
-        </p>
-        <p style="font-size:0.85rem; color:var(--success); text-align:center;">
-          ✓ Aceitamos as principais bandeiras de débito, crédito e refeição (Visa, Master, Elo, Sodexo).
-        </p>
-      </div>
-    `;
-  }
-}
-
-// Auxiliares de Cartão 3D
-function flipCard(back) {
-  const card = document.getElementById('credit-card-preview');
-  if (back) card.classList.add('flipped');
-  else card.classList.remove('flipped');
-}
-
-function formatCC(input) {
-  let val = input.value.replace(/\D/g, '');
-  if (val.length > 16) val = val.slice(0,16);
-  
-  let formatted = '';
-  for (let i = 0; i < val.length; i++) {
-    if (i > 0 && i % 4 === 0) formatted += ' ';
-    formatted += val[i];
-  }
-  input.value = formatted;
-  document.getElementById('card-preview-number').innerText = formatted || '•••• •••• •••• ••••';
-}
-
-function updateCCName(input) {
-  document.getElementById('card-preview-name').innerText = input.value.toUpperCase() || 'NOME COMPLETO';
-}
-
-function formatExpiry(input) {
-  let val = input.value.replace(/\D/g, '');
-  if (val.length > 4) val = val.slice(0, 4);
-  if (val.length > 2) {
-    input.value = val.slice(0,2) + '/' + val.slice(2);
-  } else {
-    input.value = val;
-  }
-  document.getElementById('card-preview-expiry').innerText = input.value || 'MM/AA';
-}
-
-function updateCVV(input) {
-  let val = input.value.replace(/\D/g, '');
-  if (val.length > 4) val = val.slice(0,4);
-  input.value = val;
-  document.getElementById('card-preview-cvv').innerText = val || '•••';
-}
-
-// Auxiliar de Troco
-function toggleTrocoInput(cb) {
-  document.getElementById('troco-input-wrapper').style.display = cb.checked ? 'block' : 'none';
-}
-
-// Copiar chave PIX
-function copyPixKey() {
-  const key = document.getElementById('pix-copy-key');
-  key.select();
-  navigator.clipboard.writeText(key.value);
-  showToast('Chave PIX copiada para a área de transferência!', 'success');
-}
-
-// Submete o pedido ao servidor
+// submitOrderToServer envia a encomenda.
 async function submitOrderToServer() {
   const btn = document.getElementById('checkout-next');
   btn.disabled = true;
-  btn.innerText = 'Enviando...';
+  btn.innerText = 'A enviar...';
 
-  const nome = document.getElementById('checkout-nome').value.trim();
-  const tel = document.getElementById('checkout-telefone').value.trim();
-  const paymentMethod = document.querySelector('input[name="payment_method"]:checked').value;
-  
-  let trocoPara = 0.0;
-  let lastDigits = '';
+  const restaurar = () => {
+    btn.disabled = false;
+    btn.innerText = 'Finalizar encomenda';
+  };
 
-  if (paymentMethod === 'retirada_dinheiro') {
-    const needTroco = document.getElementById('dinheiro-troco-checkbox').checked;
-    if (needTroco) {
-      trocoPara = parseFloat(document.getElementById('dinheiro-troco-val').value) || 0.0;
-      const totalVal = cart.reduce((sum, i) => sum + (i.preco * i.qty), 0);
-      if (trocoPara <= totalVal) {
-        showToast('O valor para troco deve ser maior que o valor total do pedido!', 'error');
-        btn.disabled = false;
-        btn.innerText = 'Finalizar Pedido';
+  const escolhido = document.querySelector('input[name="payment_method"]:checked');
+  if (!escolhido) {
+    showToast('Escolha um método de pagamento.', 'error');
+    restaurar();
+    return;
+  }
+
+  const total = cart.reduce((soma, i) => soma + i.preco * i.qty, 0);
+  let trocoPara = 0;
+
+  if (escolhido.value === 'dinheiro') {
+    const cb = document.getElementById('dinheiro-troco-checkbox');
+    if (cb && cb.checked) {
+      trocoPara = parseFloat(document.getElementById('dinheiro-troco-val').value) || 0;
+      if (trocoPara > 0 && trocoPara < total) {
+        showToast('O valor indicado é inferior ao total da encomenda.', 'error');
+        restaurar();
         return;
       }
     }
-  } else if (paymentMethod === 'cartao_credito') {
-    const ccNum = document.getElementById('cc-number').value.replace(/\s/g, '');
-    const ccName = document.getElementById('cc-name').value.trim();
-    const ccExp = document.getElementById('cc-expiry').value;
-    const ccCvv = document.getElementById('cc-cvv').value;
-
-    if (ccNum.length < 16 || !ccName || ccExp.length < 5 || ccCvv.length < 3) {
-      showToast('Preencha os dados do cartão de crédito corretamente.', 'error');
-      btn.disabled = false;
-      btn.innerText = 'Finalizar Pedido';
-      return;
-    }
-    // Simula loading de processamento de cartão
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    lastDigits = ccNum.slice(-4);
   }
 
-  // Prepara itens para o formato da API
-  const apiItens = cart.map(i => ({
-    menu_item_id: i.id,
-    quantidade: i.qty
-  }));
-
   const payload = {
-    cliente_nome: nome,
-    cliente_telefone: tel,
-    forma_pagamento: paymentMethod,
+    cliente_nome: document.getElementById('checkout-nome').value.trim(),
+    cliente_telefone: document.getElementById('checkout-telefone').value.trim(),
+    forma_pagamento: escolhido.value,
     troco_para: trocoPara,
-    cartao_ultimos_digitos: lastDigits,
-    itens: apiItens
+    itens: cart.map((i) => ({ menu_item_id: i.id, quantidade: i.qty })),
   };
 
   try {
     const url = resolvedByDomain ? '/api/pedidos' : `/api/${tenantSlug}/pedidos`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
+    const dados = await api(url, {
+      metodo: 'POST',
+      corpo: payload,
+      autenticado: false,
+      // A mesma chave em cada tentativa: o servidor devolve a encomenda já criada em vez
+      // de criar uma segunda.
+      idempotencyKey: chaveIdempotencia,
     });
 
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Erro ao registrar pedido.');
+    showToast('Encomenda registada.', 'success');
 
-    showToast('Pedido realizado com sucesso!', 'success');
-    
-    // Limpa carrinho
     cart = [];
     localStorage.removeItem(`cart_${tenantSlug}`);
-    
-    // Redireciona o cliente para a tela de rastreamento do pedido
-    setTimeout(() => {
-      window.location.href = `/pedido?id=${data.order.id}`;
-    }, 1000);
 
+    // O rastreio usa o token opaco: o número da encomenda não permite consultá-la.
+    window.location.href = `/pedido?t=${encodeURIComponent(dados.encomenda.public_token)}`;
   } catch (err) {
     showToast(err.message, 'error');
-    btn.disabled = false;
-    btn.innerText = 'Finalizar Pedido';
+    restaurar();
   }
 }
 
 // Configura eventos gerais do cardápio
 function setupEventListeners() {
   document.getElementById('btn-checkout').addEventListener('click', openCheckoutModal);
+  // A barra de carrinho em ecrã pequeno tinha um onclick inline, bloqueado pela CSP.
+  const barraMovel = document.getElementById('mobile-cart-bar');
+  if (barraMovel) barraMovel.addEventListener('click', openCheckoutModal);
   document.getElementById('checkout-close').addEventListener('click', closeCheckoutModal);
   document.getElementById('checkout-back').addEventListener('click', handleBackStep);
   document.getElementById('checkout-next').addEventListener('click', handleNextStep);

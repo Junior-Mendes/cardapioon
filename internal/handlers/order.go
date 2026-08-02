@@ -17,12 +17,20 @@ import (
 	"gorm.io/gorm"
 )
 
-// Métodos de pagamento suportados. O Pix foi removido: não existe em Portugal e era
-// marcado como pago sem qualquer verificação, o que permitia fechar encomendas sem pagar.
+// Métodos de pagamento suportados no MVP.
+//
+// O MVP é apenas levantamento ao balcão com pagamento na caixa: não há entrega nem
+// pagamento na aplicação. Isto elimina toda a superfície de fraude de pagamento — não
+// existe estado de "pago" para falsificar, ao contrário do Pix da versão anterior, que era
+// marcado como pago sem qualquer verificação.
+//
+// O valor gravado indica apenas a intenção declarada pelo cliente, para o balcão preparar
+// o troco ou o terminal. A confirmação do pagamento acontece fisicamente na caixa.
 const (
-	PagamentoDinheiroEntrega = "dinheiro"
-	PagamentoTPAEntrega      = "tpa"
-	PagamentoCartaoOnline    = "cartao"
+	// PagamentoBalcaoDinheiro: paga em dinheiro na caixa ao levantar.
+	PagamentoBalcaoDinheiro = "dinheiro"
+	// PagamentoBalcaoCartao: paga com cartão no terminal da caixa ao levantar.
+	PagamentoBalcaoCartao = "cartao"
 )
 
 const maxItensPorEncomenda = 100
@@ -150,7 +158,9 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 
 		pedido.ValorTotal = arredondarCentimos(total)
 
-		if pedido.FormaPagamento == PagamentoDinheiroEntrega &&
+		// O troco só é relevante para quem paga em dinheiro; um valor inferior ao total
+		// não faz sentido e seria uma surpresa no balcão.
+		if pedido.FormaPagamento == PagamentoBalcaoDinheiro &&
 			pedido.TrocoPara > 0 && pedido.TrocoPara < pedido.ValorTotal {
 			return errTrocoInsuficiente
 		}
@@ -200,19 +210,17 @@ var (
 )
 
 // validarMetodoPagamento confirma que o método está activo no restaurante.
+//
+// Ambos os métodos são pagos na caixa, ao levantar. Não há pagamento na aplicação no MVP.
 func (h *Handler) validarMetodoPagamento(t *models.Tenant, metodo string) error {
 	switch metodo {
-	case PagamentoDinheiroEntrega:
+	case PagamentoBalcaoDinheiro:
 		if !t.DinheiroAtivo {
-			return errors.New("pagamento em dinheiro não disponível neste restaurante")
+			return errors.New("este restaurante não aceita pagamento em dinheiro")
 		}
-	case PagamentoTPAEntrega:
+	case PagamentoBalcaoCartao:
 		if !t.CartaoDebitoAtivo {
-			return errors.New("pagamento por multibanco na entrega não disponível neste restaurante")
-		}
-	case PagamentoCartaoOnline:
-		if !t.CartaoCreditoAtivo {
-			return errors.New("pagamento online por cartão não disponível neste restaurante")
+			return errors.New("este restaurante não aceita pagamento com cartão")
 		}
 	default:
 		return errors.New("método de pagamento inválido")

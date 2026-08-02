@@ -31,27 +31,29 @@ func (h *Handler) GetConfig(c *gin.Context) {
 		return
 	}
 
+	// cartao_credito_ativo (pagamento online) não é exposto: no MVP o pagamento é sempre
+	// na caixa, e oferecer no painel uma opção sem efeito só gera suporte.
 	c.JSON(http.StatusOK, gin.H{
-		"nome":                 t.Nome,
-		"nif":                  t.NIF,
-		"slug":                 t.Slug,
-		"domain":               t.Domain,
-		"domain_status":        t.DomainStatus,
-		"domain_verified_at":   t.DomainVerifiedAt,
-		"cartao_credito_ativo": t.CartaoCreditoAtivo,
-		"cartao_debito_ativo":  t.CartaoDebitoAtivo,
-		"dinheiro_ativo":       t.DinheiroAtivo,
-		"main_domain":          h.Cfg.MainDomain,
-		"storefront_url":       fmt.Sprintf("https://%s.%s/menu", t.Slug, h.Cfg.MainDomain),
+		"nome":               t.Nome,
+		"nif":                t.NIF,
+		"slug":               t.Slug,
+		"domain":             t.Domain,
+		"domain_status":      t.DomainStatus,
+		"domain_verified_at": t.DomainVerifiedAt,
+		"dinheiro_ativo":     t.DinheiroAtivo,
+		"cartao_ativo":       t.CartaoDebitoAtivo,
+		"main_domain":        h.Cfg.MainDomain,
+		"storefront_url":     fmt.Sprintf("https://%s.%s/menu", t.Slug, h.Cfg.MainDomain),
 	})
 }
 
 type updateConfigInput struct {
-	Nome               *string `json:"nome"`
-	NIF                *string `json:"nif"`
-	CartaoCreditoAtivo *bool   `json:"cartao_credito_ativo"`
-	CartaoDebitoAtivo  *bool   `json:"cartao_debito_ativo"`
-	DinheiroAtivo      *bool   `json:"dinheiro_ativo"`
+	Nome *string `json:"nome"`
+	NIF  *string `json:"nif"`
+	// Métodos aceites na caixa. CartaoAtivo mapeia para a coluna cartao_debito_ativo,
+	// que representa o terminal de pagamento físico.
+	DinheiroAtivo *bool `json:"dinheiro_ativo"`
+	CartaoAtivo   *bool `json:"cartao_ativo"`
 }
 
 // UpdateConfig actualiza os dados do restaurante.
@@ -94,18 +96,31 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 		}
 		campos["nif"] = nif
 	}
-	if in.CartaoCreditoAtivo != nil {
-		campos["cartao_credito_ativo"] = *in.CartaoCreditoAtivo
-	}
-	if in.CartaoDebitoAtivo != nil {
-		campos["cartao_debito_ativo"] = *in.CartaoDebitoAtivo
-	}
 	if in.DinheiroAtivo != nil {
 		campos["dinheiro_ativo"] = *in.DinheiroAtivo
+	}
+	if in.CartaoAtivo != nil {
+		campos["cartao_debito_ativo"] = *in.CartaoAtivo
 	}
 
 	if len(campos) == 0 {
 		c.JSON(http.StatusOK, gin.H{"message": "Nada a actualizar"})
+		return
+	}
+
+	// Desactivar ambos os métodos deixaria o restaurante a receber encomendas que não
+	// consegue cobrar.
+	dinheiro := t.DinheiroAtivo
+	if in.DinheiroAtivo != nil {
+		dinheiro = *in.DinheiroAtivo
+	}
+	cartao := t.CartaoDebitoAtivo
+	if in.CartaoAtivo != nil {
+		cartao = *in.CartaoAtivo
+	}
+	if !dinheiro && !cartao {
+		erroCliente(c, http.StatusBadRequest,
+			"Mantenha pelo menos um método de pagamento activo, ou não poderá cobrar as encomendas")
 		return
 	}
 
