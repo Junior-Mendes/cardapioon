@@ -201,28 +201,9 @@
 
   <script src="/static/js/common.js"></script>
   <script src="/static/js/order.js"></script>
-  <script>
-    // Injeta data-slug no card principal para auxiliar o botão voltar
-    document.addEventListener('DOMContentLoaded', () => {
-      const checkSlug = setInterval(() => {
-        const slugElement = document.getElementById('track-rest-name');
-        const urlParams = new URLSearchParams(window.location.search);
-        // Tenta obter o slug do restaurante assim que o order.js carregar os dados
-        const backBtn = document.getElementById('btn-back-menu');
-        const orderId = urlParams.get('id');
-        if (orderId) {
-          fetch(`/api/pedidos/${orderId}`)
-            .then(r => r.json())
-            .then(data => {
-              if (data.restaurante_slug) {
-                document.getElementById('order-tracking-card').dataset.slug = data.restaurante_slug;
-                clearInterval(checkSlug);
-              }
-            })
-            .catch(() => {});
-        }
-      }, 1000);
-    });
-  </script>
+  <!-- O botão de voltar ao menu é ligado em order.js, que já conhece o slug da
+       encomenda. O script inline que aqui existia fazia polling do endpoint antigo
+       /api/pedidos/:id e era bloqueado pela CSP. -->
+
 </body>
 </html>

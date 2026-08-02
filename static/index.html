@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SaaS Cardápio Online - Crie o Seu Cardápio Digital em Minutos</title>
-  <meta name="description" content="Plataforma de cardápio digital multi-tenant para restaurantes. Crie seu link, receba pedidos para retirada e gerencie pagamentos online.">
+  <title>SaaS Menu Online - Crie o Seu Menu Digital em Minutos</title>
+  <meta name="description" content="Plataforma de menu digital multi-tenant para restaurantes. Crie seu link, receba encomendas para retirada e gerencie pagamentos online.">
   <link rel="stylesheet" href="/static/css/style.css">
   <style>
     .landing-hero {
@@ -84,7 +84,7 @@
     <div style="max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center;">
       <div class="logo-container">
         <div class="logo-icon">C</div>
-        <div class="logo-text">Cardápio<span>Online</span></div>
+        <div class="logo-text">Menu<span>Online</span></div>
       </div>
       <div>
         <a href="/admin" class="btn btn-secondary">Painel do Lojista</a>
@@ -95,23 +95,23 @@
   <!-- Hero Section -->
   <main class="landing-hero anim-slide-up">
     <div class="hero-text">
-      <h1>Seu restaurante online com <span>Retirada no Local</span></h1>
+      <h1>O seu restaurante online, com <span>levantamento ao balcão</span></h1>
       <p>
-        Crie seu cardápio digital em menos de 1 minuto. Permita que seus clientes comprem direto pelo celular, realizem o pagamento online por Pix ou Cartão e retirem o pedido pronto no balcão sem filas!
+        Crie o seu menu digital em menos de um minuto. Os seus clientes encomendam pelo telemóvel, pagam na caixa ao levantar, e não ficam em fila. <strong>Sem comissões por encomenda</strong> — paga uma mensalidade fixa, não 30% de cada venda.
       </p>
       
       <div class="feature-list">
         <div class="feature-item">
-          <span class="feature-icon">✓</span> Multi-Tenant SaaS (Seu link próprio: cardapio.com/sua-loja)
+          <span class="feature-icon">✓</span> Endereço próprio para a sua loja, com certificado de segurança incluído
         </div>
         <div class="feature-item">
-          <span class="feature-icon">✓</span> Métodos de pagamento configuráveis pelo lojista
+          <span class="feature-icon">✓</span> Pagamento na caixa: dinheiro ou cartão, como preferir
         </div>
         <div class="feature-item">
-          <span class="feature-icon">✓</span> Gestão de cardápio com preços e descontos promocionais
+          <span class="feature-icon">✓</span> Gestão de menu com preços e descontos promocionais
         </div>
         <div class="feature-item">
-          <span class="feature-icon">✓</span> Painel de pedidos Kanban com aviso de retirada disponível
+          <span class="feature-icon">✓</span> Painel de encomendas Kanban com aviso de retirada disponível
         </div>
       </div>
     </div>
@@ -127,9 +127,10 @@
           <input type="text" id="reg-nome" class="form-control" placeholder="Ex: Pizzaria do João" required>
         </div>
         <div class="form-group">
-          <label for="reg-slug">Link de Vendas Exclusivo</label>
+          <label for="reg-slug">Endereço da sua loja</label>
           <div style="display:flex; align-items:stretch;">
             <input type="text" id="reg-slug" class="form-control" placeholder="pizzariadojoao" required style="border-top-right-radius:0; border-bottom-right-radius:0; flex:1;">
+            <span id="slug-suffix" style="padding:0.6rem 0.75rem; background:var(--bg-tertiary); color:var(--text-muted); font-size:0.85rem; border-radius:0 var(--radius-sm) var(--radius-sm) 0; white-space:nowrap;"></span>
             <span style="display:inline-flex; align-items:center; background:var(--bg-tertiary); border:1px solid var(--border-color); border-left:none; padding:0 1rem; border-top-right-radius:var(--radius-sm); border-bottom-right-radius:var(--radius-sm); font-size:0.85rem; color:var(--text-muted); font-weight:600; white-space:nowrap;">
               .topautomacaojr.top
             </span>
@@ -148,58 +149,8 @@
     </div>
   </main>
 
-  <script>
-    document.getElementById('signup-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const nome = document.getElementById('reg-nome').value.trim();
-      const slug = document.getElementById('reg-slug').value.trim();
-      const email = document.getElementById('reg-email').value.trim();
-      const password = document.getElementById('reg-password').value.trim();
 
-      const btn = e.target.querySelector('button[type="submit"]');
-      btn.disabled = true;
-      btn.innerText = 'Registrando...';
-
-      try {
-        const res = await fetch('/api/tenant/registrar', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ nome, slug, email, password })
-        });
-
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Erro ao registrar.');
-
-        // Mostra toast de sucesso
-        const container = document.getElementById('toast-container');
-        const toast = document.createElement('div');
-        toast.className = 'toast toast-success glass show';
-        toast.innerHTML = `<span>Registro concluído! Redirecionando...</span>`;
-        container.appendChild(toast);
-
-        // Preenche login automático
-        localStorage.setItem('admin_token', data.token);
-        localStorage.setItem('admin_name', data.nome);
-        localStorage.setItem('admin_slug', data.tenant.slug);
-
-        setTimeout(() => {
-          window.location.href = '/admin';
-        }, 1500);
-
-      } catch (err) {
-        // Mostra erro
-        const container = document.getElementById('toast-container');
-        const toast = document.createElement('div');
-        toast.className = 'toast toast-error glass show';
-        toast.innerHTML = `<span>${err.message}</span>`;
-        container.appendChild(toast);
-        setTimeout(() => toast.remove(), 4000);
-        
-        btn.disabled = false;
-        btn.innerText = 'Registrar e Começar';
-      }
-    });
-  </script>
   <script src="/static/js/common.js"></script>
+  <script src="/static/js/landing.js"></script>
 </body>
 </html>
