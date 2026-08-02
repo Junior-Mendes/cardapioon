@@ -128,6 +128,9 @@ func construirRouter(
 	gin.SetMode(cfg.GinMode)
 
 	r := gin.New()
+	// Limite de memória para formulários multipart. Acima disto o Gin escreve em disco
+	// temporário em vez de manter tudo em RAM.
+	r.MaxMultipartMemory = 4 << 20
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestLogger())
 
@@ -156,6 +159,8 @@ func construirRouter(
 	limitePublico := middleware.NewRateLimiter(300, 60)
 	limiteEncomenda := middleware.NewRateLimiter(20, 10)
 	limiteDNS := middleware.NewRateLimiter(10, 5)
+	// Upload é caro (descodificar e recodificar imagem): limite mais apertado.
+	limiteUpload := middleware.NewRateLimiter(30, 10)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -227,6 +232,10 @@ func construirRouter(
 			gestao.POST("/config/dominio/verificar", h.VerificarDominio)
 			gestao.GET("/config/check-dns", limiteDNS.Limit(), h.CheckDNS)
 		}
+
+		// Upload de imagens: quem pode editar o menu pode carregar imagens.
+		admin.POST("/upload", middleware.RequireRole(middleware.RoleGerente),
+			limiteUpload.Limit(), h.UploadImagem)
 
 		// Cardápio: gerente e acima.
 		cardapio := admin.Group("/cardapio", middleware.RequireRole(middleware.RoleGerente))

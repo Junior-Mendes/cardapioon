@@ -150,7 +150,9 @@ func SecurityHeaders(devMode bool) gin.HandlerFunc {
 		// Os estilos inline vêm de atributos style= no HTML existente; remover isso é
 		// trabalho de frontend e está registado como dívida técnica.
 		"style-src 'self' 'unsafe-inline'",
-		"img-src 'self' data: https:",
+		// blob: é necessário para a pré-visualização da imagem escolhida antes de ser
+		// enviada (URL.createObjectURL). data: cobre imagens embutidas.
+		"img-src 'self' data: blob: https:",
 		"font-src 'self' data:",
 		"connect-src 'self'",
 		"frame-ancestors 'none'",

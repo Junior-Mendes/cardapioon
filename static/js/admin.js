@@ -382,12 +382,15 @@ function openItemModal(id = null) {
       document.getElementById('item-preco-desconto').value = item.preco_desconto || '';
       document.getElementById('item-descricao').value = item.descricao || '';
       document.getElementById('item-imagem-url').value = item.imagem_url || '';
+      mostrarPreview(document.getElementById('preview-item-imagem'), item.imagem_url || '');
       document.getElementById('item-disponivel').checked = item.disponivel;
       toggleDiscountInput(document.getElementById('item-desconto-checkbox'));
     }
   } else {
     document.getElementById('modal-action-title').innerText = 'Adicionar produto';
     document.getElementById('item-form').reset();
+    document.getElementById('item-imagem-url').value = '';
+    mostrarPreview(document.getElementById('preview-item-imagem'), '');
     document.getElementById('item-disponivel').checked = true;
     toggleDiscountInput(document.getElementById('item-desconto-checkbox'));
   }
@@ -516,6 +519,7 @@ async function loadGeneralConfig() {
 
     // Identidade visual
     definirValor('config-logo-url', config.logo_url || '');
+    mostrarPreview(document.getElementById('preview-logo'), config.logo_url || '');
     definirValor('config-descricao-curta', config.descricao_curta || '');
     definirCheck('config-mostrar-marca', config.mostrar_marca_plataforma !== false);
     definirCorPrimaria(config.cor_primaria || '');
@@ -658,6 +662,135 @@ async function handleVerifyDomain() {
     wrapper.style.background = 'rgba(255, 71, 87, 0.1)';
     wrapper.style.color = '#ff4757';
     wrapper.innerText = err.message;
+  }
+}
+
+// --- Upload de imagens ---
+
+/**
+ * carregarImagem envia um ficheiro escolhido pelo utilizador e devolve o URL público.
+ *
+ * O ficheiro é processado no servidor: redimensionado, recodificado (o que remove os
+ * metadados EXIF, incluindo as coordenadas GPS que as fotos de telemóvel trazem) e gravado
+ * com nome aleatório.
+ *
+ * @param {File} ficheiro
+ * @param {'produto'|'logo'} uso
+ * @returns {Promise<string>} o caminho público da imagem
+ */
+async function carregarImagem(ficheiro, uso) {
+  const MAX_BYTES = 8 * 1024 * 1024;
+  if (ficheiro.size > MAX_BYTES) {
+    throw new Error('A imagem tem mais de 8 MB. Escolha uma imagem menor.');
+  }
+
+  const formulario = new FormData();
+  formulario.append('ficheiro', ficheiro);
+
+  // fetch directo em vez de api(): api() envia JSON, e um upload precisa de multipart
+  // com a fronteira definida pelo browser. O cabeçalho Content-Type é deixado de fora
+  // de propósito — defini-lo à mão parte a fronteira.
+  const enviar = async () => fetch(`/api/admin/upload?uso=${encodeURIComponent(uso)}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${Sessao.accessToken()}` },
+    body: formulario,
+  });
+
+  let res = await enviar();
+
+  // Um upload pode demorar e apanhar o access token a expirar a meio.
+  if (res.status === 401 && Sessao.refreshToken()) {
+    const novo = await renovarSessaoSeNecessario();
+    if (novo) res = await enviar();
+  }
+
+  const dados = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(dados?.error || 'Não foi possível carregar a imagem.');
+  }
+  return dados.url;
+}
+
+// renovarSessaoSeNecessario reaproveita o fluxo de renovação de common.js através de uma
+// chamada autenticada trivial.
+async function renovarSessaoSeNecessario() {
+  try {
+    await api('/api/admin/config');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * ligarSelectorDeImagem liga um trio (botão, input de ficheiro, pré-visualização).
+ *
+ * Mostra a pré-visualização local imediatamente, antes do upload terminar: numa ligação
+ * móvel lenta, esperar pelo servidor para ver a imagem escolhida parece que nada aconteceu.
+ */
+function ligarSelectorDeImagem({ botaoId, inputId, previewId, urlId, estadoId, removerId, uso }) {
+  const botao = document.getElementById(botaoId);
+  const input = document.getElementById(inputId);
+  const preview = document.getElementById(previewId);
+  const campoUrl = document.getElementById(urlId);
+  const estado = document.getElementById(estadoId);
+  const remover = document.getElementById(removerId);
+
+  if (!botao || !input || !preview || !campoUrl) return;
+
+  botao.addEventListener('click', () => input.click());
+
+  input.addEventListener('change', async () => {
+    const ficheiro = input.files && input.files[0];
+    if (!ficheiro) return;
+
+    // Pré-visualização local imediata.
+    const urlLocal = URL.createObjectURL(ficheiro);
+    mostrarPreview(preview, urlLocal);
+
+    const textoOriginal = estado ? estado.textContent : '';
+    if (estado) estado.textContent = 'A carregar…';
+    botao.disabled = true;
+
+    try {
+      const url = await carregarImagem(ficheiro, uso);
+      campoUrl.value = url;
+      // Passa a apontar para o ficheiro no servidor, já processado.
+      mostrarPreview(preview, url);
+      if (estado) estado.textContent = 'Imagem carregada. Guarde para aplicar.';
+      showToast('Imagem carregada.', 'success');
+    } catch (err) {
+      // Reverte a pré-visualização para o que estava gravado.
+      mostrarPreview(preview, campoUrl.value);
+      if (estado) estado.textContent = textoOriginal;
+      showToast(err.message, 'error');
+    } finally {
+      botao.disabled = false;
+      URL.revokeObjectURL(urlLocal);
+      // Permite escolher o mesmo ficheiro outra vez depois de um erro.
+      input.value = '';
+    }
+  });
+
+  if (remover) {
+    remover.addEventListener('click', () => {
+      campoUrl.value = '';
+      mostrarPreview(preview, '');
+      if (estado) estado.textContent = 'Imagem removida. Guarde para aplicar.';
+    });
+  }
+}
+
+// mostrarPreview pinta a miniatura, ou o texto de vazio quando não há imagem.
+function mostrarPreview(elemento, url) {
+  if (!elemento) return;
+
+  if (url) {
+    elemento.style.backgroundImage = `url('${escAttr(url)}')`;
+    elemento.textContent = '';
+  } else {
+    elemento.style.backgroundImage = '';
+    elemento.innerHTML = elemento.dataset.vazio || 'sem<br>imagem';
   }
 }
 
@@ -873,6 +1006,18 @@ function setupEventListeners() {
   ligar('user-form', 'submit', handleSaveUser);
 
   ligar('general-config-form', 'submit', handleSaveGeneralConfig);
+
+  // Selectores de imagem: computador ou telemóvel (galeria e câmara).
+  ligarSelectorDeImagem({
+    botaoId: 'btn-escolher-logo', inputId: 'config-logo-ficheiro',
+    previewId: 'preview-logo', urlId: 'config-logo-url',
+    estadoId: 'estado-logo', removerId: 'btn-remover-logo', uso: 'logo',
+  });
+  ligarSelectorDeImagem({
+    botaoId: 'btn-escolher-item-imagem', inputId: 'item-imagem-ficheiro',
+    previewId: 'preview-item-imagem', urlId: 'item-imagem-url',
+    estadoId: 'estado-item-imagem', removerId: 'btn-remover-item-imagem', uso: 'produto',
+  });
 
   // Identidade visual: selector e campo hexadecimal mantêm-se sincronizados.
   ligar('config-cor-primaria', 'input', (e) => {

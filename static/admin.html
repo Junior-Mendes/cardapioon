@@ -272,13 +272,26 @@
               </p>
 
               <div class="form-group">
-                <label for="config-logo-url">Endereço do logótipo</label>
-                <input type="url" id="config-logo-url" class="form-control"
-                       placeholder="https://…/logotipo.png">
-                <span style="font-size:0.8rem; color:var(--text-muted); display:block; margin-top:0.35rem;">
-                  Tem de começar por <code>https://</code>. Formato quadrado dá melhor resultado.
-                  Sem logótipo, usamos as iniciais do nome.
-                </span>
+                <label>Logótipo</label>
+                <div style="display:flex; gap:1rem; align-items:flex-start; flex-wrap:wrap;">
+                  <div id="preview-logo" data-vazio="sem&lt;br&gt;logótipo" style="width:76px; height:76px; flex:none; border-radius:var(--radius-sm); border:1px solid var(--border-color); background:var(--bg-tertiary) center/cover no-repeat; display:flex; align-items:center; justify-content:center; color:var(--text-muted); font-size:0.7rem; text-align:center;">sem<br>logótipo</div>
+                  <div style="flex:1; min-width:220px;">
+                    <!-- accept restringe o que o selector mostra; em telemóvel dá acesso à
+                         galeria e à câmara. Sem o atributo capture, para não forçar a câmara. -->
+                    <input type="file" id="config-logo-ficheiro" accept="image/jpeg,image/png,image/webp" style="display:none;">
+                    <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                      <button type="button" class="btn btn-secondary" id="btn-escolher-logo"
+                              style="padding:0.5rem 0.9rem; font-size:0.85rem;">Escolher imagem…</button>
+                      <button type="button" class="btn btn-secondary" id="btn-remover-logo"
+                              style="padding:0.5rem 0.9rem; font-size:0.85rem; color:var(--danger);">Remover</button>
+                    </div>
+                    <span id="estado-logo" style="font-size:0.8rem; color:var(--text-muted); display:block; margin-top:0.5rem;">
+                      JPEG, PNG ou WebP, até 8 MB. Formato quadrado dá melhor resultado.
+                      Sem logótipo usamos as iniciais do nome.
+                    </span>
+                    <input type="hidden" id="config-logo-url">
+                  </div>
+                </div>
               </div>
 
               <div class="form-group" style="margin-top:1.25rem;">
@@ -410,10 +423,25 @@
           <textarea id="item-descricao" class="form-control" rows="3" placeholder="Ex: Ingredientes, tamanho, porções..."></textarea>
         </div>
 
-        <div class="form-group">
-          <label for="item-imagem-url">URL da Imagem do Prato</label>
-          <input type="url" id="item-imagem-url" class="form-control" placeholder="https://exemplo.com/foto.jpg">
-        </div>
+          <div class="form-group">
+            <label>Fotografia do prato</label>
+            <div style="display:flex; gap:1rem; align-items:flex-start; flex-wrap:wrap;">
+              <div id="preview-item-imagem" data-vazio="sem&lt;br&gt;foto" style="width:96px; height:96px; flex:none; border-radius:var(--radius-sm); border:1px solid var(--border-color); background:var(--bg-tertiary) center/cover no-repeat; display:flex; align-items:center; justify-content:center; color:var(--text-muted); font-size:0.7rem; text-align:center;">sem<br>foto</div>
+              <div style="flex:1; min-width:200px;">
+                <input type="file" id="item-imagem-ficheiro" accept="image/jpeg,image/png,image/webp" style="display:none;">
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                  <button type="button" class="btn btn-secondary" id="btn-escolher-item-imagem"
+                          style="padding:0.5rem 0.9rem; font-size:0.85rem;">Escolher / tirar foto…</button>
+                  <button type="button" class="btn btn-secondary" id="btn-remover-item-imagem"
+                          style="padding:0.5rem 0.9rem; font-size:0.85rem; color:var(--danger);">Remover</button>
+                </div>
+                <span id="estado-item-imagem" style="font-size:0.8rem; color:var(--text-muted); display:block; margin-top:0.5rem;">
+                  JPEG, PNG ou WebP, até 8 MB. Reduzimos e optimizamos automaticamente.
+                </span>
+                <input type="hidden" id="item-imagem-url">
+              </div>
+            </div>
+          </div>
 
         <div class="switch-control" style="background: transparent; border: none; padding: 0.5rem 0; margin-bottom: 1.5rem;">
           <div>
