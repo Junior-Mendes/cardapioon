@@ -3,13 +3,14 @@ package db
 import (
 	"fmt"
 	"log/slog"
-	"net/url"
+	"net"
 	"time"
 
 	"cardapio-online/internal/auth"
 	"cardapio-online/internal/config"
 	"cardapio-online/internal/models"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -75,17 +76,30 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 	return gdb, nil
 }
 
-// dsn constrói a string de ligação com a senha escapada.
+// dsn constrói a string de ligação usando o Config do próprio driver.
 //
-// A versão anterior interpolava a senha directamente; a senha em uso contém '!' e '@',
-// e um '@' numa senha não escapada parte o DSN no sítio errado.
+// Não usar interpolação nem url.QueryEscape aqui. O DSN do go-sql-driver/mysql não é
+// URL-encoded: o parser localiza o último '@' antes do endereço, pelo que a senha pode
+// conter '@', '!' ou '#' sem escape. Escapá-la faz com que os '%XX' sejam enviados
+// literalmente como parte da senha, e a ligação é recusada com "Access denied" apesar de
+// a senha estar correcta. FormatDSN() aplica as regras do driver.
 func dsn(cfg *config.Config, nomeBase string) string {
-	credenciais := url.QueryEscape(cfg.DBUser)
-	if cfg.DBPassword != "" {
-		credenciais += ":" + url.QueryEscape(cfg.DBPassword)
-	}
-	return fmt.Sprintf("%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local&timeout=10s&readTimeout=30s&writeTimeout=30s",
-		credenciais, cfg.DBHost, cfg.DBPort, nomeBase)
+	c := mysqldriver.NewConfig()
+	c.User = cfg.DBUser
+	c.Passwd = cfg.DBPassword
+	c.Net = "tcp"
+	c.Addr = net.JoinHostPort(cfg.DBHost, cfg.DBPort)
+	c.DBName = nomeBase
+	c.Collation = "utf8mb4_unicode_ci"
+	c.ParseTime = true
+	c.Loc = time.Local
+	c.Timeout = 10 * time.Second
+	c.ReadTimeout = 30 * time.Second
+	c.WriteTimeout = 30 * time.Second
+	// Sem isto, uma ligação que caia deixa o pool a devolver erros até reiniciar.
+	c.AllowNativePasswords = true
+
+	return c.FormatDSN()
 }
 
 // garantirUtilizadorPorTenant cria um utilizador owner para tenants que não tenham

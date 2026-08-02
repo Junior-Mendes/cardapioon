@@ -51,7 +51,10 @@ EXPOSE 8081
 
 # O healthcheck usa /ready, que também verifica a base de dados: um contentor que não
 # consegue falar com o MySQL não deve ser considerado saudável.
+#
+# -O /dev/null e não --spider: o --spider envia HEAD, e as rotas do Gin registadas com GET
+# respondem 404 a HEAD, o que marcaria o contentor como unhealthy indefinidamente.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD wget --spider -q http://127.0.0.1:8081/ready || exit 1
+    CMD wget -q -O /dev/null http://127.0.0.1:8081/ready || exit 1
 
 ENTRYPOINT ["./servidor"]
