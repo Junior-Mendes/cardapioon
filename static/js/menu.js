@@ -20,7 +20,8 @@ let currentStep = 1;
 // duplo-toque ou um retry após timeout não crie duas encomendas.
 let chaveIdempotencia = null;
 
-// Obtém o slug do restaurante da URL (ex: ?tenant=bella-italia)
+// Slug do restaurante, quando indicado explicitamente (ex.: ?tenant=tasca-do-bairro).
+// No uso normal o restaurante é resolvido pelo subdomínio ou domínio próprio.
 const urlParams = new URLSearchParams(window.location.search);
 let tenantSlug = urlParams.get('tenant');
 let resolvedByDomain = false;
@@ -44,11 +45,29 @@ async function detectAndLoadMenu() {
     console.warn("Erro ao detectar restaurante por domínio:", err);
   }
 
+  // Sem restaurante resolvido não há menu para mostrar. A versão anterior tinha aqui um
+  // slug de demonstração fixo, o que levava a um 404 confuso assim que esse restaurante
+  // deixasse de existir.
   if (!tenantSlug) {
-    tenantSlug = 'bella-italia';
+    mostrarSemRestaurante();
+    return;
   }
 
   loadRestaurantMenu();
+}
+
+// mostrarSemRestaurante explica o que fazer quando o endereço não identifica uma loja.
+function mostrarSemRestaurante() {
+  document.getElementById('menu-items-container').innerHTML = `
+    <div class="cart-empty glass" style="grid-column: 1/-1;">
+      <div class="cart-empty-icon">🔎</div>
+      <h3>Nenhum restaurante neste endereço</h3>
+      <p>Use o link que o restaurante lhe deu, ou visite a página inicial para conhecer o serviço.</p>
+      <a href="/" class="btn btn-secondary" style="margin-top:1rem;">Ir para a página inicial</a>
+    </div>
+  `;
+  const barra = document.getElementById('mobile-cart-bar');
+  if (barra) barra.classList.remove('active');
 }
 
 // Busca o cardápio público no back-end
