@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Painel do Lojista - Gestão de Cardápio & Pedidos</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+
+  <!-- Toast Container para Notificações -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Login Modal Overlay (Aparece se não autenticado) -->
+  <div class="modal-overlay" id="login-overlay" style="background:var(--bg-primary);">
+    <div class="modal-card glass" style="max-width:400px; transform:none;">
+      <div class="tracking-header" style="margin-bottom:2rem;">
+        <div class="logo-icon" style="margin: 0 auto 1rem;">C</div>
+        <h2 style="font-weight:800; font-size:1.5rem;">Acesse seu Painel</h2>
+        <p style="color:var(--text-muted); font-size:0.85rem; margin-top:0.25rem;">Gerencie seu cardápio online e pedidos</p>
+      </div>
+
+      <form id="login-form">
+        <div class="form-group">
+          <label for="login-slug">E-mail ou Slug do Restaurante</label>
+          <input type="text" id="login-slug" class="form-control" placeholder="Ex: admin@bellaitalia.com ou bella-italia" required>
+        </div>
+        <div class="form-group">
+          <label for="login-password">Senha</label>
+          <input type="password" id="login-password" class="form-control" placeholder="Sua senha" required>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%; margin-top:1rem;">Acessar Painel</button>
+      </form>
+      
+      <div style="margin-top: 1.5rem; text-align: center; font-size: 0.85rem;">
+        <span style="color:var(--text-muted);">Ainda não tem cadastro?</span>
+        <a href="/" style="color:var(--primary); font-weight:600; text-decoration:none; margin-left:0.25rem;">Cadastre-se aqui</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Layout Principal do Admin -->
+  <div class="admin-container">
+    
+    <!-- Sidebar de Navegação -->
+    <aside class="sidebar">
+      <div class="logo-container">
+        <div class="logo-icon">C</div>
+        <div class="logo-text">Cardápio<span>Admin</span></div>
+      </div>
+
+      <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border-color); padding:0.75rem 1rem; border-radius:var(--radius-sm); font-size:0.9rem;">
+        <span style="color:var(--text-muted); font-size:0.75rem; text-transform:uppercase; display:block;">Logado como</span>
+        <strong id="logged-user-name" style="color:#fff;">Restaurante</strong>
+      </div>
+
+      <ul class="nav-links">
+        <li class="nav-item active" id="nav-pedidos">
+          <a href="#"><span style="font-size:1.1rem;">📋</span> Pedidos</a>
+        </li>
+        <li class="nav-item" id="nav-cardapio">
+          <a href="#"><span style="font-size:1.1rem;">🍔</span> Cardápio</a>
+        </li>
+        <li class="nav-item" id="nav-pagamentos">
+          <a href="#"><span style="font-size:1.1rem;">💳</span> Pagamentos</a>
+        </li>
+        <li class="nav-item" id="nav-usuarios">
+          <a href="#"><span style="font-size:1.1rem;">👥</span> Usuários</a>
+        </li>
+        <li class="nav-item" id="nav-configuracoes">
+          <a href="#"><span style="font-size:1.1rem;">⚙️</span> Configurações</a>
+        </li>
+      </ul>
+
+      <div class="nav-logout">
+        <button class="btn btn-outline" id="nav-logout-btn" style="width:100%; border-color:var(--border-color); color:var(--text-muted);">Sair do Painel</button>
+      </div>
+    </aside>
+
+    <!-- Área de Conteúdo Principal -->
+    <main class="main-content">
+      
+      <!-- ABA 1: PEDIDOS -->
+      <section id="tab-pedidos">
+        <div class="admin-header">
+          <div class="admin-title">
+            <h1>Gestão de Pedidos</h1>
+            <p>Gerencie as solicitações de retirada recebidas em tempo real</p>
+          </div>
+          <button class="btn btn-secondary" onclick="loadOrders()"><span style="font-size:1.1rem;">🔄</span> Atualizar</button>
+        </div>
+
+        <!-- Cards de Métricas -->
+        <div class="metrics-grid">
+          <div class="metric-card glass">
+            <div class="metric-icon">💰</div>
+            <div class="metric-value" id="metric-sales">R$ 0,00</div>
+            <div class="metric-label">Vendas Concluídas</div>
+          </div>
+          <div class="metric-card glass">
+            <div class="metric-icon">🔥</div>
+            <div class="metric-value" id="metric-orders">0</div>
+            <div class="metric-label">Pedidos Ativos</div>
+          </div>
+          <div class="metric-card glass">
+            <div class="metric-icon">📦</div>
+            <div class="metric-value" id="metric-total-orders">0</div>
+            <div class="metric-label">Total de Pedidos</div>
+          </div>
+        </div>
+
+        <!-- Kanban Board de Pedidos -->
+        <div class="board-container">
+          <!-- Coluna 1: Pendentes -->
+          <div class="board-column glass">
+            <div class="column-header">
+              <span class="column-title">⏳ Pendentes</span>
+              <span class="column-count" id="count-pendente">0</span>
+            </div>
+            <div class="orders-list" id="list-pendente">
+              <!-- Injetado via JS -->
+            </div>
+          </div>
+
+          <!-- Coluna 2: Preparando -->
+          <div class="board-column glass">
+            <div class="column-header">
+              <span class="column-title">🍳 Preparando</span>
+              <span class="column-count" id="count-preparando">0</span>
+            </div>
+            <div class="orders-list" id="list-preparando">
+              <!-- Injetado via JS -->
+            </div>
+          </div>
+
+          <!-- Coluna 3: Pronto para Retirada -->
+          <div class="board-column glass" style="background: rgba(46, 213, 115, 0.03); border-color: rgba(46, 213, 115, 0.2);">
+            <div class="column-header">
+              <span class="column-title" style="color:var(--success);">✓ Pronto P/ Retirada</span>
+              <span class="column-count" id="count-pronto" style="background:var(--success); color:#fff;">0</span>
+            </div>
+            <div class="orders-list" id="list-pronto">
+              <!-- Injetado via JS -->
+            </div>
+          </div>
+
+          <!-- Coluna 4: Histórico -->
+          <div class="board-column glass">
+            <div class="column-header">
+              <span class="column-title">📦 Histórico (Hoje)</span>
+              <span class="column-count" id="count-finalizado">0</span>
+            </div>
+            <div class="orders-list" id="list-finalizado">
+              <!-- Injetado via JS -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ABA 2: CARDÁPIO -->
+      <section id="tab-cardapio" style="display:none;">
+        <div class="admin-header">
+          <div class="admin-title">
+            <h1>Gestão do Cardápio</h1>
+            <p>Inclua, remova, edite preços, descontos e pause itens do cardápio</p>
+          </div>
+          <button class="btn btn-primary" id="btn-add-item">Adicionar Prato</button>
+        </div>
+
+        <div class="menu-grid" id="menu-items-admin">
+          <!-- Grade de pratos injetados via JS -->
+        </div>
+      </section>
+
+      <!-- ABA 3: PAGAMENTOS -->
+      <section id="tab-pagamentos" style="display:none;">
+        <div class="admin-header">
+          <div class="admin-title">
+            <h1>Métodos de Pagamento</h1>
+            <p>Configure quais opções de pagamento estarão ativas para o cliente no checkout</p>
+          </div>
+        </div>
+
+        <div class="glass" style="max-width: 600px; padding: 2rem; border-radius: var(--radius-md);">
+          <form id="payments-form">
+            
+            <div class="switch-control">
+              <div>
+                <strong style="display:block;">Pagamento via PIX (Online)</strong>
+                <span style="font-size:0.8rem; color:var(--text-muted);">Exibe um QR Code simulado no fechamento da compra</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="config-pix-ativo">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div id="pix-key-wrapper" class="form-group" style="display:none; padding-left: 1rem; border-left: 3px solid var(--primary); margin-bottom: 2rem;">
+              <label for="config-pix-chave">Chave PIX do Restaurante</label>
+              <input type="text" id="config-pix-chave" class="form-control" placeholder="CNPJ, Celular, E-mail ou Chave Aleatória">
+            </div>
+
+            <div class="switch-control">
+              <div>
+                <strong style="display:block;">Cartão de Crédito (Online)</strong>
+                <span style="font-size:0.8rem; color:var(--text-muted);">Habilita o simulador de dados de cartão de crédito no checkout</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="config-credito-ativo">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="switch-control">
+              <div>
+                <strong style="display:block;">Dinheiro (na Retirada)</strong>
+                <span style="font-size:0.8rem; color:var(--text-muted);">Permite pagar em dinheiro no balcão e solicitar troco</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="config-dinheiro-ativo">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="switch-control">
+              <div>
+                <strong style="display:block;">Cartão de Débito/Crédito (na Retirada)</strong>
+                <span style="font-size:0.8rem; color:var(--text-muted);">Informa que o pagamento será feito na maquininha no momento da entrega/retirada</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="config-debito-ativo">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="margin-top: 1.5rem; width: 100%;">Salvar Métodos de Pagamento</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- ABA 4: USUÁRIOS -->
+      <section id="tab-usuarios" style="display:none;">
+        <div class="admin-header">
+          <div class="admin-title">
+            <h1>Gestão de Usuários</h1>
+            <p>Gerencie as contas de acesso ao painel do restaurante</p>
+          </div>
+          <button class="btn btn-primary" id="btn-add-user" type="button">Adicionar Usuário</button>
+        </div>
+
+        <div class="glass" style="margin-top: 1.5rem; padding: 1.5rem; border-radius: var(--radius-md); overflow-x: auto;">
+          <table class="admin-table" style="width: 100%; border-collapse: collapse; text-align: left;">
+            <thead>
+              <tr style="border-bottom: 2px solid var(--border-color); color: var(--text-muted); font-size: 0.85rem;">
+                <th style="padding: 1rem 0.5rem;">Nome</th>
+                <th style="padding: 1rem 0.5rem;">E-mail</th>
+                <th style="padding: 1rem 0.5rem;">Função</th>
+                <th style="padding: 1rem 0.5rem;">Status</th>
+                <th style="padding: 1rem 0.5rem; text-align: right;">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="users-list-table">
+              <!-- Injetado via JS -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ABA 5: CONFIGURAÇÕES -->
+      <section id="tab-configuracoes" style="display:none;">
+        <div class="admin-header">
+          <div class="admin-title">
+            <h1>Configurações Gerais</h1>
+            <p>Configure os dados fundamentais do seu restaurante e domínio personalizado</p>
+          </div>
+        </div>
+
+        <div class="glass" style="max-width: 600px; padding: 2rem; border-radius: var(--radius-md);">
+          <form id="general-config-form">
+            <div class="form-group">
+              <label for="config-rest-nome">Nome do Restaurante</label>
+              <input type="text" id="config-rest-nome" class="form-control" required placeholder="Nome do seu restaurante">
+            </div>
+
+            <div class="form-group" style="margin-top: 1.5rem;">
+              <label for="config-rest-domain">Domínio Personalizado (DNS)</label>
+              <div style="display:flex; gap:0.5rem; align-items:center;">
+                <input type="text" id="config-rest-domain" class="form-control" placeholder="Ex: www.pizzariadojoao.com.br" style="flex:1;">
+                <button type="button" class="btn btn-secondary" id="btn-check-dns" style="padding:0.6rem 1rem; font-size:0.85rem; white-space:nowrap;">Testar Conexão</button>
+              </div>
+              <div id="dns-status-wrapper" style="margin-top:0.75rem; display:none; padding:0.75rem; border-radius:var(--radius-sm); font-size:0.85rem;">
+                <!-- Status injetado via JS -->
+              </div>
+              <span style="font-size:0.8rem; color:var(--text-muted); display:block; margin-top:0.5rem;">
+                Aponte o DNS do seu domínio próprio na sua registradora (ex: Registro.br) usando:
+                <br>• Tipo <strong>CNAME</strong> com Nome <code>www</code> apontando para <code id="lbl-main-domain">deliverysistema.com.br</code>
+                <br>• Ou tipo <strong>A</strong> com Nome <code>@</code> (vazio) apontando para o IP de nosso servidor.
+              </span>
+            </div>
+
+            <div class="form-group" style="margin-top: 1.5rem; background: rgba(255,255,255,0.03); border:1px solid var(--border-color); padding: 1rem; border-radius: var(--radius-sm);">
+              <label style="display:block; margin-bottom: 0.25rem;">Seu Subdomínio Grátis:</label>
+              <a href="#" id="lbl-subdomain-link" target="_blank" style="color: var(--primary); font-weight:600; text-decoration:none; word-break: break-all;">carregando...</a>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="margin-top: 2rem; width: 100%;">Salvar Configurações Gerais</button>
+          </form>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Modal Adicionar/Editar Item de Cardápio -->
+  <div class="modal-overlay" id="menu-item-overlay">
+    <div class="modal-card glass" style="max-width: 550px;">
+      <div class="modal-header">
+        <h3 class="modal-title" id="modal-action-title">Adicionar Prato</h3>
+        <button class="modal-close" id="modal-close-btn">&times;</button>
+      </div>
+
+      <form id="item-form">
+        <div style="display:grid; grid-template-columns: 1.2fr 1fr; gap:1rem;">
+          <div class="form-group">
+            <label for="item-nome">Nome do Prato/Bebida</label>
+            <input type="text" id="item-nome" class="form-control" required placeholder="Ex: Pizza Calabresa Especial">
+          </div>
+          <div class="form-group">
+            <label for="item-categoria">Categoria</label>
+            <input type="text" id="item-categoria" class="form-control" list="categories-list" required placeholder="Ex: Pizzas, Bebidas, Burgers">
+            <datalist id="categories-list">
+              <option value="Pizzas">
+              <option value="Hambúrgueres">
+              <option value="Bebidas">
+              <option value="Sobremesas">
+              <option value="Entradas">
+              <option value="Acompanhamentos">
+            </datalist>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem; margin-top:0.5rem;">
+          <div class="form-group">
+            <label for="item-preco">Preço Base (R$)</label>
+            <input type="number" id="item-preco" class="form-control" step="0.01" required placeholder="0.00">
+          </div>
+          <div class="form-group" style="display:flex; flex-direction:column; justify-content:center;">
+            <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+              <input type="checkbox" id="item-desconto-checkbox" style="width:18px; height:18px; accent-color:var(--primary);">
+              <span>Ativar Desconto Promocional</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group" id="desconto-input-wrapper" style="display:none; border-left: 3px solid var(--success); padding-left: 1rem;">
+          <label for="item-preco-desconto">Preço Promocional (R$)</label>
+          <input type="number" id="item-preco-desconto" class="form-control" step="0.01" placeholder="Preço com desconto">
+        </div>
+
+        <div class="form-group">
+          <label for="item-descricao">Descrição do Prato</label>
+          <textarea id="item-descricao" class="form-control" rows="3" placeholder="Ex: Ingredientes, tamanho, porções..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="item-imagem-url">URL da Imagem do Prato</label>
+          <input type="url" id="item-imagem-url" class="form-control" placeholder="https://exemplo.com/foto.jpg">
+        </div>
+
+        <div class="switch-control" style="background: transparent; border: none; padding: 0.5rem 0; margin-bottom: 1.5rem;">
+          <div>
+            <strong style="display:block;">Disponível no Cardápio (Ativo)</strong>
+            <span style="font-size:0.8rem; color:var(--text-muted);">Caso desativado, o prato ficará pausado e oculto para clientes</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="item-disponivel" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:0.75rem; border-top:1px solid var(--border-color); padding-top:1.5rem;">
+          <button type="button" class="btn btn-secondary" onclick="closeItemModal()">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Salvar Item</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal Adicionar Usuário -->
+  <div class="modal-overlay" id="user-overlay">
+    <div class="modal-card glass" style="max-width: 450px;">
+      <div class="modal-header">
+        <h3 class="modal-title">Adicionar Usuário</h3>
+        <button class="modal-close" id="user-modal-close-btn" type="button">&times;</button>
+      </div>
+
+      <form id="user-form">
+        <div class="form-group">
+          <label for="user-nome">Nome Completo</label>
+          <input type="text" id="user-nome" class="form-control" required placeholder="Ex: João Silva">
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+          <label for="user-email">E-mail</label>
+          <input type="email" id="user-email" class="form-control" required placeholder="Ex: joao@restaurante.com">
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+          <label for="user-password">Senha de Acesso</label>
+          <input type="password" id="user-password" class="form-control" required minlength="6" placeholder="Min. 6 caracteres">
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+          <label for="user-role">Função / Nível de Acesso</label>
+          <select id="user-role" class="form-control" required>
+            <option value="admin">Administrador</option>
+            <option value="gerente">Gerente</option>
+            <option value="funcionario">Funcionário</option>
+          </select>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:0.75rem; border-top:1px solid var(--border-color); padding-top:1.5rem; margin-top: 1.5rem;">
+          <button type="button" class="btn btn-secondary" id="user-modal-cancel-btn">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Cadastrar Usuário</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/js/admin.js"></script>
+</body>
+</html>

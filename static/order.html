@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rastreamento do Pedido - Cardápio Online</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    .tracking-container {
+      max-width: 600px;
+      margin: 3rem auto;
+      padding: 0 1.5rem;
+    }
+    .tracking-card {
+      padding: 2.5rem;
+      border-radius: var(--radius-lg);
+      margin-bottom: 2rem;
+    }
+    .tracking-header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    .restaurant-title {
+      font-size: 1.75rem;
+      font-weight: 800;
+      color: #fff;
+    }
+    .order-code {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-top: 0.25rem;
+    }
+    
+    /* Progress tracker */
+    .tracker-flow {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: relative;
+      margin: 2.5rem 0 1.5rem;
+      padding: 0 1rem;
+    }
+    .tracker-bar {
+      position: absolute;
+      top: 50%;
+      left: 1rem;
+      right: 1rem;
+      height: 4px;
+      background: var(--bg-tertiary);
+      z-index: 1;
+      transform: translateY(-50%);
+    }
+    .tracker-bar-fill {
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 100%;
+      width: 0%;
+      background: var(--success);
+      z-index: 2;
+      transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .tracker-dot {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--bg-primary);
+      border: 3px solid var(--border-color);
+      z-index: 3;
+      position: relative;
+      transition: var(--transition);
+    }
+    .tracker-dot.active {
+      border-color: var(--primary);
+      background: var(--bg-primary);
+      transform: scale(1.2);
+    }
+    .tracker-dot.completed {
+      border-color: var(--success);
+      background: var(--success);
+    }
+    .tracker-labels {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 2.5rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      padding: 0 0.5rem;
+    }
+    .tracker-label-item {
+      width: 60px;
+      text-align: center;
+    }
+    .tracker-label-item.active {
+      color: var(--primary);
+    }
+    .tracker-label-item.completed {
+      color: var(--success);
+    }
+
+    .status-alert-box {
+      padding: 1.25rem;
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border-color);
+      margin-bottom: 2rem;
+      text-align: center;
+    }
+    
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid var(--border-color);
+      font-size: 0.95rem;
+    }
+    .detail-row:last-child {
+      border-bottom: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="tracking-container">
+    <div class="tracking-card glass anim-slide-up" id="order-tracking-card">
+      
+      <!-- Cabeçalho -->
+      <div class="tracking-header">
+        <h1 class="restaurant-title" id="track-rest-name">Restaurante</h1>
+        <div class="order-code">Código do Pedido: <span id="track-order-id">#0</span></div>
+        <div class="order-code" style="font-size:0.8rem;" id="track-time">--:--</div>
+      </div>
+
+      <!-- Tracker Visual -->
+      <div class="tracker-flow">
+        <div class="tracker-bar">
+          <div class="tracker-bar-fill" id="tracker-bar-fill"></div>
+        </div>
+        <div class="tracker-dot" id="dot-0"></div>
+        <div class="tracker-dot" id="dot-1"></div>
+        <div class="tracker-dot" id="dot-2"></div>
+        <div class="tracker-dot" id="dot-3"></div>
+      </div>
+
+      <!-- Rótulos do Tracker -->
+      <div class="tracker-labels">
+        <span class="tracker-label-item">Criado</span>
+        <span class="tracker-label-item">Preparo</span>
+        <span class="tracker-label-item">Pronto</span>
+        <span class="tracker-label-item">Retirado</span>
+      </div>
+
+      <!-- Alerta/Mensagem de Status Principal -->
+      <div class="status-alert-box">
+        <span class="restaurant-badge" style="margin-bottom: 0.75rem;" id="track-status-badge">Carregando...</span>
+        <div id="track-status-desc">
+          <p>Consultando informações do seu pedido no servidor...</p>
+        </div>
+      </div>
+
+      <!-- Detalhes do Pedido -->
+      <div style="margin-top:2.5rem;">
+        <h3 style="font-size:1.1rem; font-weight:700; margin-bottom:1rem; border-bottom: 2px solid var(--border-color); padding-bottom:0.5rem;">Resumo da Retirada</h3>
+        
+        <div class="detail-row">
+          <span style="color:var(--text-muted);">Nome do Cliente</span>
+          <strong id="track-client-name">--</strong>
+        </div>
+        <div class="detail-row">
+          <span style="color:var(--text-muted);">WhatsApp de Contato</span>
+          <strong id="track-client-phone">--</strong>
+        </div>
+        <div class="detail-row">
+          <span style="color:var(--text-muted);">Pagamento</span>
+          <strong id="track-payment">--</strong>
+        </div>
+      </div>
+
+      <!-- Itens do Pedido -->
+      <div style="margin-top:2rem;">
+        <h3 style="font-size:1.1rem; font-weight:700; margin-bottom:1rem; border-bottom: 2px solid var(--border-color); padding-bottom:0.5rem;">Itens Selecionados</h3>
+        <div id="track-items-list" style="padding: 0.5rem 0;">
+          <!-- Injetado via JS -->
+        </div>
+        <div class="detail-row" style="border-top: 2px dashed var(--border-color); padding-top: 1rem; font-size:1.15rem; font-weight:700;">
+          <span>Valor Total</span>
+          <span id="track-total" style="color:var(--success);">R$ 0,00</span>
+        </div>
+      </div>
+
+      <!-- Botão Voltar ao Cardápio -->
+      <div style="margin-top:2.5rem; text-align:center;">
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">Deseja adicionar mais itens ou fazer outro pedido?</p>
+        <button class="btn btn-secondary" onclick="window.location.href='/menu?tenant=' + document.getElementById('order-tracking-card').dataset.slug" id="btn-back-menu" style="width: 100%;">Voltar ao Cardápio</button>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="/static/js/order.js"></script>
+  <script>
+    // Injeta data-slug no card principal para auxiliar o botão voltar
+    document.addEventListener('DOMContentLoaded', () => {
+      const checkSlug = setInterval(() => {
+        const slugElement = document.getElementById('track-rest-name');
+        const urlParams = new URLSearchParams(window.location.search);
+        // Tenta obter o slug do restaurante assim que o order.js carregar os dados
+        const backBtn = document.getElementById('btn-back-menu');
+        const orderId = urlParams.get('id');
+        if (orderId) {
+          fetch(`/api/pedidos/${orderId}`)
+            .then(r => r.json())
+            .then(data => {
+              if (data.restaurante_slug) {
+                document.getElementById('order-tracking-card').dataset.slug = data.restaurante_slug;
+                clearInterval(checkSlug);
+              }
+            })
+            .catch(() => {});
+        }
+      }, 1000);
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cardápio Online - Faça Seu Pedido</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/menu.css">
+</head>
+<body>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Header -->
+  <header style="border-bottom: 1px solid var(--border-color); padding: 1.25rem 2rem; background: var(--bg-secondary);">
+    <div style="max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center;">
+      <div class="logo-container">
+        <div class="logo-icon">C</div>
+        <div class="logo-text" id="rest-title">Carregando...</div>
+      </div>
+      <a href="/" style="font-size:0.9rem; color:var(--text-muted); text-decoration:none;">Criar meu Cardápio</a>
+    </div>
+  </header>
+
+  <!-- Principal Layout -->
+  <main class="menu-layout anim-slide-up">
+    <div>
+      <!-- Banner do Restaurante -->
+      <div class="restaurant-banner" id="restaurant-banner">
+        <span class="restaurant-badge">Aberto para Retirada</span>
+        <h1 class="restaurant-name" id="rest-name">Nome do Restaurante</h1>
+      </div>
+
+      <!-- Barra de Categorias -->
+      <div class="categories-bar" id="categories-bar"></div>
+
+      <!-- Produtos -->
+      <div class="products-container">
+        <div class="category-section">
+          <div class="items-grid" id="menu-items-container">
+            <!-- Os itens serão injetados via JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Carrinho Lateral (Desktop) -->
+    <aside class="cart-sidebar glass">
+      <div class="cart-title">
+        <span>Seu Pedido</span>
+        <span style="font-size:0.8rem; background:var(--primary); padding:0.2rem 0.5rem; border-radius:10px;" id="cart-count-badge">0</span>
+      </div>
+      
+      <div class="cart-items" id="cart-items">
+        <div class="cart-empty">
+          <div class="cart-empty-icon">🛒</div>
+          <p>Seu carrinho está vazio</p>
+        </div>
+      </div>
+
+      <div class="cart-totals" id="cart-totals" style="display:none;">
+        <div class="total-row">
+          <span>Subtotal</span>
+          <span id="subtotal-val">R$ 0,00</span>
+        </div>
+        <div class="total-row grand-total" style="margin-top:0.5rem;">
+          <span>Total (Retirada)</span>
+          <span id="total-val">R$ 0,00</span>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" id="btn-checkout" style="width:100%;" disabled>Ir para o Checkout</button>
+    </aside>
+  </main>
+
+  <!-- Botão Flutuante do Carrinho (Celular) -->
+  <div class="mobile-cart-bar active" id="mobile-cart-bar" onclick="openCheckoutModal()">
+    <div class="mobile-cart-info">
+      <span class="mobile-cart-qty" id="mobile-qty">0 itens</span>
+      <span class="mobile-cart-total" id="mobile-total">R$ 0,00</span>
+    </div>
+    <button class="btn btn-primary" style="padding: 0.5rem 1rem;">Ver Sacola</button>
+  </div>
+
+  <!-- Modal do Checkout -->
+  <div class="modal-overlay" id="checkout-modal">
+    <div class="modal-card glass">
+      <div class="modal-header">
+        <h3 class="modal-title">Finalizar Pedido</h3>
+        <button class="modal-close" id="checkout-close">&times;</button>
+      </div>
+
+      <!-- Barra de Progresso do Checkout -->
+      <div class="checkout-steps">
+        <div class="step-item active">1</div>
+        <div class="step-item">2</div>
+        <div class="step-item">3</div>
+      </div>
+
+      <!-- Conteúdo das Etapas -->
+      <div id="checkout-modal-body">
+        
+        <!-- Passo 1: Informações Pessoais -->
+        <div id="step-1-form">
+          <p style="font-size:0.9rem; color:var(--text-muted); margin-bottom:1.5rem;">
+            Preencha seus dados básicos para identificarmos sua retirada no restaurante.
+          </p>
+          <div class="form-group">
+            <label for="checkout-nome">Seu Nome Completo</label>
+            <input type="text" id="checkout-nome" class="form-control" placeholder="Como quer ser chamado?" required>
+          </div>
+          <div class="form-group">
+            <label for="checkout-telefone">Número de Telefone/WhatsApp</label>
+            <input type="tel" id="checkout-telefone" class="form-control" placeholder="(00) 90000-0000" required>
+          </div>
+        </div>
+
+        <!-- Passo 2: Seleção do Método de Pagamento -->
+        <div id="step-2-payment" style="display:none;">
+          <p style="font-size:0.9rem; color:var(--text-muted); margin-bottom:1rem;">
+            Selecione uma das opções de pagamento ativas oferecidas pelo restaurante:
+          </p>
+          <div id="payment-options-container" class="payment-options-grid">
+            <!-- Injetado via JS dinamicamente -->
+          </div>
+        </div>
+
+        <!-- Passo 3: Tela de Simulação / Mock de Pagamento -->
+        <div id="step-3-sim" style="display:none;">
+          <div id="simulation-content">
+            <!-- Conteúdo dinâmico dependendo da escolha (Form de Cartão 3D, Pix QR ou Dinheiro) -->
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Rodapé do Modal (Ações) -->
+      <div style="display:flex; justify-content:space-between; margin-top:2rem; border-top:1px solid var(--border-color); padding-top:1.5rem;">
+        <button class="btn btn-secondary" id="checkout-back" style="display:none;">Voltar</button>
+        <button class="btn btn-primary" id="checkout-next" style="margin-left:auto;">Continuar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/menu.js"></script>
+</body>
+</html>

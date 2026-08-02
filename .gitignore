@@ -1,0 +1,30 @@
+# ---- SEGREDOS: nunca versionar ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Certificados e chaves privadas TLS geridos pelo Traefik
+letsencrypt/
+acme.json
+
+# Configuração dinâmica gerada em runtime pelo backend
+traefik_dynamic/*.yml
+
+# ---- Artefactos de build ----
+/api
+/cardapio
+*.exe
+*.test
+*.out
+vendor/
+
+# ---- Uploads de utilizadores ----
+static/uploads/
+
+# ---- Ambiente local ----
+.DS_Store
+*.log
+.idea/
+.vscode/

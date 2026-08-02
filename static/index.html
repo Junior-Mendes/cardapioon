@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SaaS Cardápio Online - Crie o Seu Cardápio Digital em Minutos</title>
+  <meta name="description" content="Plataforma de cardápio digital multi-tenant para restaurantes. Crie seu link, receba pedidos para retirada e gerencie pagamentos online.">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    .landing-hero {
+      max-width: 1000px;
+      margin: 4rem auto;
+      padding: 0 1.5rem;
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 4rem;
+      align-items: center;
+    }
+    @media (max-width: 768px) {
+      .landing-hero {
+        grid-template-columns: 1fr;
+        margin: 2rem auto;
+        gap: 2.5rem;
+      }
+    }
+    .hero-text h1 {
+      font-size: 3rem;
+      font-weight: 800;
+      line-height: 1.2;
+      margin-bottom: 1.5rem;
+      letter-spacing: -1px;
+    }
+    .hero-text h1 span {
+      background: linear-gradient(135deg, var(--primary) 0%, #ff6b81 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero-text p {
+      font-size: 1.15rem;
+      color: var(--text-muted);
+      margin-bottom: 2.5rem;
+    }
+    .signup-card {
+      padding: 2.5rem;
+      border-radius: var(--radius-lg);
+    }
+    .signup-card h2 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+    .signup-card p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+    }
+    .feature-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin-bottom: 2rem;
+    }
+    .feature-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+    .feature-icon {
+      color: var(--success);
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Header/Navbar -->
+  <header style="border-bottom: 1px solid var(--border-color); padding: 1.25rem 2rem;">
+    <div style="max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center;">
+      <div class="logo-container">
+        <div class="logo-icon">C</div>
+        <div class="logo-text">Cardápio<span>Online</span></div>
+      </div>
+      <div>
+        <a href="/admin" class="btn btn-secondary">Painel do Lojista</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <main class="landing-hero anim-slide-up">
+    <div class="hero-text">
+      <h1>Seu restaurante online com <span>Retirada no Local</span></h1>
+      <p>
+        Crie seu cardápio digital em menos de 1 minuto. Permita que seus clientes comprem direto pelo celular, realizem o pagamento online por Pix ou Cartão e retirem o pedido pronto no balcão sem filas!
+      </p>
+      
+      <div class="feature-list">
+        <div class="feature-item">
+          <span class="feature-icon">✓</span> Multi-Tenant SaaS (Seu link próprio: cardapio.com/sua-loja)
+        </div>
+        <div class="feature-item">
+          <span class="feature-icon">✓</span> Métodos de pagamento configuráveis pelo lojista
+        </div>
+        <div class="feature-item">
+          <span class="feature-icon">✓</span> Gestão de cardápio com preços e descontos promocionais
+        </div>
+        <div class="feature-item">
+          <span class="feature-icon">✓</span> Painel de pedidos Kanban com aviso de retirada disponível
+        </div>
+      </div>
+    </div>
+
+    <!-- Cadastro -->
+    <div class="signup-card glass" style="box-shadow: 0 20px 40px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1);">
+      <h2 style="font-size: 1.65rem; font-weight: 800; letter-spacing:-0.5px;">Crie sua Conta Grátis</h2>
+      <p style="margin-bottom: 2rem;">Preencha os dados abaixo e ative seu restaurante na hora</p>
+      
+      <form id="signup-form">
+        <div class="form-group">
+          <label for="reg-nome">Nome do Restaurante</label>
+          <input type="text" id="reg-nome" class="form-control" placeholder="Ex: Pizzaria do João" required>
+        </div>
+        <div class="form-group">
+          <label for="reg-slug">Link de Vendas Exclusivo</label>
+          <div style="display:flex; align-items:stretch;">
+            <input type="text" id="reg-slug" class="form-control" placeholder="pizzariadojoao" required style="border-top-right-radius:0; border-bottom-right-radius:0; flex:1;">
+            <span style="display:inline-flex; align-items:center; background:var(--bg-tertiary); border:1px solid var(--border-color); border-left:none; padding:0 1rem; border-top-right-radius:var(--radius-sm); border-bottom-right-radius:var(--radius-sm); font-size:0.85rem; color:var(--text-muted); font-weight:600; white-space:nowrap;">
+              .topautomacaojr.top
+            </span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="reg-email">E-mail do Administrador</label>
+          <input type="email" id="reg-email" class="form-control" placeholder="Ex: admin@restaurante.com" required>
+        </div>
+        <div class="form-group">
+          <label for="reg-password">Senha de Acesso</label>
+          <input type="password" id="reg-password" class="form-control" placeholder="Digite uma senha forte" required>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 1.5rem; padding:0.9rem; font-size:1rem;">Ativar Meu Restaurante 🚀</button>
+      </form>
+    </div>
+  </main>
+
+  <script>
+    document.getElementById('signup-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const nome = document.getElementById('reg-nome').value.trim();
+      const slug = document.getElementById('reg-slug').value.trim();
+      const email = document.getElementById('reg-email').value.trim();
+      const password = document.getElementById('reg-password').value.trim();
+
+      const btn = e.target.querySelector('button[type="submit"]');
+      btn.disabled = true;
+      btn.innerText = 'Registrando...';
+
+      try {
+        const res = await fetch('/api/tenant/registrar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nome, slug, email, password })
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Erro ao registrar.');
+
+        // Mostra toast de sucesso
+        const container = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        toast.className = 'toast toast-success glass show';
+        toast.innerHTML = `<span>Registro concluído! Redirecionando...</span>`;
+        container.appendChild(toast);
+
+        // Preenche login automático
+        localStorage.setItem('admin_token', data.token);
+        localStorage.setItem('admin_name', data.nome);
+        localStorage.setItem('admin_slug', data.tenant.slug);
+
+        setTimeout(() => {
+          window.location.href = '/admin';
+        }, 1500);
+
+      } catch (err) {
+        // Mostra erro
+        const container = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        toast.className = 'toast toast-error glass show';
+        toast.innerHTML = `<span>${err.message}</span>`;
+        container.appendChild(toast);
+        setTimeout(() => toast.remove(), 4000);
+        
+        btn.disabled = false;
+        btn.innerText = 'Registrar e Começar';
+      }
+    });
+  </script>
+</body>
+</html>
