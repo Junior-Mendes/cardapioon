@@ -25,7 +25,11 @@ type MenuItem struct {
 	//
 	// É uma escolha do estabelecimento, produto a produto: um prato e uma cerveja não têm
 	// a mesma taxa. O software não a decide.
-	TaxaIVABP dinheiro.TaxaBP `gorm:"column:taxa_iva_bp;not null;default:1300" json:"taxa_iva_bp"`
+	//
+	// SEM `default:` na etiqueta, de propósito. Com um default, o GORM omite o campo do
+	// INSERT quando o valor é o zero da linguagem e deixa a base aplicar o seu default —
+	// o que fazia com que "Isento" (0) fosse gravado como 13%. Um erro de taxa silencioso.
+	TaxaIVABP dinheiro.TaxaBP `gorm:"column:taxa_iva_bp;not null" json:"taxa_iva_bp"`
 
 	// Colunas legadas, mantidas para compatibilidade de rollback.
 	Preco         float64 `gorm:"type:decimal(10,2);not null" json:"-"`

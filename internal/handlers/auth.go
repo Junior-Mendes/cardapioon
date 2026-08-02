@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"cardapio-online/internal/auth"
+	"cardapio-online/internal/dinheiro"
 	"cardapio-online/internal/middleware"
 	"cardapio-online/internal/models"
 	"cardapio-online/internal/validate"
@@ -87,8 +88,12 @@ func (h *Handler) Registar(c *gin.Context) {
 			SenhaHash:    hash,
 			DomainStatus: models.DomainNenhum,
 			// Dinheiro fica activo por omissão para que o restaurante possa receber
-			// encomendas antes de configurar pagamento online.
+			// encomendas desde o primeiro minuto.
 			DinheiroAtivo: true,
+			// Definidos explicitamente: as etiquetas `default:` do GORM foram removidas
+			// porque omitiam valores zero legítimos do INSERT.
+			MostrarMarcaPlataforma: true,
+			TaxaIVAOmissaoBP:       dinheiro.TaxaIntermedia,
 		}
 		if err := tx.Create(&tenant).Error; err != nil {
 			return err

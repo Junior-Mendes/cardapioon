@@ -180,9 +180,14 @@ func (a *ambiente) semear(t *testing.T, gdb *gorm.DB) {
 	}
 
 	criar := func(nome, slug string) (models.Tenant, models.Usuario, models.MenuItem, models.Pedido) {
+		// Os valores por omissão são definidos explicitamente, como em Registar: as
+		// etiquetas `default:` do GORM foram removidas porque omitiam valores zero
+		// legítimos do INSERT.
 		tenant := models.Tenant{
 			Nome: nome, Slug: slug, Ativo: true, SenhaHash: hash,
 			DomainStatus: models.DomainNenhum, DinheiroAtivo: true, CartaoDebitoAtivo: true,
+			MostrarMarcaPlataforma: true,
+			TaxaIVAOmissaoBP:       dinheiro.TaxaIntermedia,
 		}
 		if err := gdb.Create(&tenant).Error; err != nil {
 			t.Fatalf("criar tenant %s: %v", slug, err)
@@ -918,6 +923,54 @@ func TestTaxaDoProdutoEhEscolhaDoEstabelecimento(t *testing.T) {
 		t.Errorf("taxa inválida aceite: status %d: %s", rec.Code, rec.Body.String())
 	}
 
+	// Isento (taxa 0) tem de ser gravado como 0.
+	//
+	// Regressão: a etiqueta `default:1300` na struct fazia o GORM omitir o campo do INSERT
+	// quando o valor era o zero da linguagem, e a base aplicava o seu próprio default.
+	// Resultado: escolher "Isento" gravava 13% em silêncio — um erro de taxa.
+	rec = amb.fazer(pedidoHTTP{
+		metodo: "POST", rota: "/api/admin/cardapio",
+		corpo: `{"nome":"Produto isento","preco_texto":"5,00","categoria":"Diversos","taxa_iva_bp":0}`,
+		token: token,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("produto isento: status %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &criado); err != nil {
+		t.Fatal(err)
+	}
+	if criado.TaxaIVABP != 0 {
+		t.Errorf("taxa isenta gravada como %d, esperado 0", criado.TaxaIVABP)
+	}
+
+	// Confirmação directa na base: o valor tem de estar lá como 0, não só na resposta.
+	var naBase models.MenuItem
+	if err := amb.gdb.First(&naBase, criado.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if naBase.TaxaIVABP != 0 {
+		t.Errorf("taxa na base = %d, esperado 0", naBase.TaxaIVABP)
+	}
+
+	// E o menu público não deve extrair IVA de um produto isento.
+	recPub := amb.fazer(pedidoHTTP{metodo: "GET", rota: "/api/public-menu",
+		host: amb.tenantA.Slug + "." + dominioTeste})
+	var pub struct {
+		Itens []struct {
+			ID       uint  `json:"id"`
+			IVACents int64 `json:"iva_cents"`
+			TaxaBP   int32 `json:"taxa_iva_bp"`
+		} `json:"itens"`
+	}
+	if err := json.Unmarshal(recPub.Body.Bytes(), &pub); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range pub.Itens {
+		if it.ID == criado.ID && it.IVACents != 0 {
+			t.Errorf("produto isento com IVA de %d cêntimos", it.IVACents)
+		}
+	}
+
 	// Preço com três casas decimais é recusado em vez de truncado.
 	rec = amb.fazer(pedidoHTTP{
 		metodo: "POST", rota: "/api/admin/cardapio",
@@ -1148,6 +1201,29 @@ func TestNaoPodeReclamarDominioDaPlataforma(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("domínio da plataforma %q aceite: status %d: %s", d, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+// TestDesligarAssinaturaDaPlataformaPersiste cobre a mesma classe de bug do `default:`
+// do GORM: false é o zero de bool, e com um default na etiqueta seria omitido do INSERT.
+func TestDesligarAssinaturaDaPlataformaPersiste(t *testing.T) {
+	amb := montarAmbiente(t)
+
+	rec := amb.fazer(pedidoHTTP{
+		metodo: "PUT", rota: "/api/admin/config",
+		corpo: `{"mostrar_marca_plataforma":false}`,
+		token: amb.tokenDe(amb.userA),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var t2 models.Tenant
+	if err := amb.gdb.First(&t2, amb.tenantA.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if t2.MostrarMarcaPlataforma {
+		t.Error("a assinatura da plataforma continuou activa depois de desligada")
 	}
 }
 

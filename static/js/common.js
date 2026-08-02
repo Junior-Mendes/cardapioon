@@ -112,6 +112,97 @@ function formatTime(valor) {
   return d.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
 }
 
+// --- Selector segmentado ---
+
+/**
+ * SegGroup opera um grupo de botões com role="radiogroup".
+ *
+ * Substitui um <select> quando as opções são poucas e fixas. O popup nativo de um select
+ * não herda o fundo do tema — usa o do sistema — o que num tema escuro deixava o texto das
+ * opções quase invisível. Além disso mostra todas as opções de uma vez e evita um toque
+ * extra no telemóvel.
+ */
+const SegGroup = {
+  /** valor devolve a opção seleccionada, como string. */
+  valor(id) {
+    const grupo = document.getElementById(id);
+    if (!grupo) return '';
+    const activa = grupo.querySelector('[aria-checked="true"]');
+    return activa ? activa.dataset.valor : '';
+  },
+
+  /** definir selecciona a opção com o valor indicado. */
+  definir(id, valor) {
+    const grupo = document.getElementById(id);
+    if (!grupo) return;
+
+    const opcoes = [...grupo.querySelectorAll('[role="radio"]')];
+    let encontrada = false;
+
+    opcoes.forEach((o) => {
+      const seleccionada = String(o.dataset.valor) === String(valor);
+      o.setAttribute('aria-checked', seleccionada ? 'true' : 'false');
+      // Só a opção activa entra na ordem de tabulação, como manda o padrão de radiogroup.
+      o.tabIndex = seleccionada ? 0 : -1;
+      if (seleccionada) encontrada = true;
+    });
+
+    // Valor desconhecido (por exemplo uma taxa gravada que já não está na lista):
+    // selecciona a primeira para não deixar o grupo sem escolha.
+    if (!encontrada && opcoes.length > 0) {
+      opcoes[0].setAttribute('aria-checked', 'true');
+      opcoes[0].tabIndex = 0;
+    }
+  },
+
+  /**
+   * ligar activa o grupo e chama onChange a cada alteração.
+   * Suporta rato, toque e setas do teclado.
+   */
+  ligar(id, onChange) {
+    const grupo = document.getElementById(id);
+    if (!grupo || grupo.dataset.ligado) return;
+    grupo.dataset.ligado = '1';
+
+    const opcoes = [...grupo.querySelectorAll('[role="radio"]')];
+
+    const seleccionar = (opcao) => {
+      this.definir(id, opcao.dataset.valor);
+      opcao.focus();
+      if (onChange) onChange(opcao.dataset.valor);
+    };
+
+    opcoes.forEach((opcao, indice) => {
+      opcao.addEventListener('click', () => seleccionar(opcao));
+
+      opcao.addEventListener('keydown', (e) => {
+        let destino = null;
+        switch (e.key) {
+          case 'ArrowRight':
+          case 'ArrowDown':
+            destino = opcoes[(indice + 1) % opcoes.length];
+            break;
+          case 'ArrowLeft':
+          case 'ArrowUp':
+            destino = opcoes[(indice - 1 + opcoes.length) % opcoes.length];
+            break;
+          case ' ':
+          case 'Enter':
+            destino = opcao;
+            break;
+          default:
+            return;
+        }
+        e.preventDefault();
+        seleccionar(destino);
+      });
+    });
+
+    // Garante um tabIndex coerente à partida.
+    this.definir(id, this.valor(id));
+  },
+};
+
 // --- Toast ---
 
 function showToast(mensagem, tipo = 'info') {

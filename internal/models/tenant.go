@@ -28,7 +28,9 @@ type Tenant struct {
 	CorSecundaria  string `gorm:"type:char(7)" json:"cor_secundaria"`
 	DescricaoCurta string `gorm:"type:varchar(200)" json:"descricao_curta"`
 	// MostrarMarcaPlataforma controla a assinatura discreta no fundo do storefront.
-	MostrarMarcaPlataforma bool `gorm:"not null;default:true" json:"mostrar_marca_plataforma"`
+	// Sem `default:` na etiqueta: com um default, desligar a assinatura (false, que é o
+	// zero de bool) seria omitido do INSERT e a base voltaria a pô-la a true.
+	MostrarMarcaPlataforma bool `gorm:"not null" json:"mostrar_marca_plataforma"`
 
 	// NIF do estabelecimento. Necessário para a facturação da subscrição e para os
 	// documentos que o restaurante emite.
@@ -37,7 +39,9 @@ type Tenant struct {
 	// TaxaIVAOmissaoBP é a taxa sugerida ao criar um produto novo, em pontos base.
 	// Poupa ao lojista escolher a taxa em cada produto quando a maioria tem a mesma.
 	// A escolha final é sempre por produto.
-	TaxaIVAOmissaoBP dinheiro.TaxaBP `gorm:"column:taxa_iva_omissao_bp;not null;default:1300" json:"taxa_iva_omissao_bp"`
+	// Sem `default:` na etiqueta, pela mesma razão de MenuItem.TaxaIVABP: o GORM omitiria
+	// o campo do INSERT quando o valor fosse zero (isento).
+	TaxaIVAOmissaoBP dinheiro.TaxaBP `gorm:"column:taxa_iva_omissao_bp;not null" json:"taxa_iva_omissao_bp"`
 
 	Slug string `gorm:"type:varchar(50);uniqueIndex;not null" json:"slug"`
 

@@ -384,7 +384,7 @@ function openItemModal(id = null) {
       document.getElementById('item-desconto-checkbox').checked = item.desconto_ativo;
       document.getElementById('item-preco-desconto').value =
         item.preco_desconto_cents ? (item.preco_desconto_cents / 100).toFixed(2) : '';
-      definirValor('item-taxa-iva', String(item.taxa_iva_bp ?? 1300));
+      SegGroup.definir('item-taxa-iva', item.taxa_iva_bp ?? 1300);
       document.getElementById('item-descricao').value = item.descricao || '';
       document.getElementById('item-imagem-url').value = item.imagem_url || '';
       mostrarPreview(document.getElementById('preview-item-imagem'), item.imagem_url || '');
@@ -395,7 +395,7 @@ function openItemModal(id = null) {
     document.getElementById('modal-action-title').innerText = 'Adicionar produto';
     document.getElementById('item-form').reset();
     // Produto novo herda a taxa sugerida do restaurante, que o lojista pode alterar.
-    definirValor('item-taxa-iva', String(taxaIVAOmissao));
+    SegGroup.definir('item-taxa-iva', taxaIVAOmissao);
     document.getElementById('item-imagem-url').value = '';
     mostrarPreview(document.getElementById('preview-item-imagem'), '');
     document.getElementById('item-disponivel').checked = true;
@@ -442,7 +442,7 @@ async function handleSaveItem(e) {
     preco_desconto_texto: descontoAtivo
       ? document.getElementById('item-preco-desconto').value.trim()
       : '',
-    taxa_iva_bp: Number(valorDe('item-taxa-iva')) || 0,
+    taxa_iva_bp: Number(SegGroup.valor('item-taxa-iva')) || 0,
     desconto_ativo: descontoAtivo,
     descricao: document.getElementById('item-descricao').value.trim(),
     imagem_url: document.getElementById('item-imagem-url').value.trim(),
@@ -484,7 +484,7 @@ function actualizarDetalheIVA() {
   const descontoAtivo = document.getElementById('item-desconto-checkbox')?.checked;
   const campoPreco = descontoAtivo ? 'item-preco-desconto' : 'item-preco';
   const cents = parseValor(valorDe(campoPreco));
-  const taxa = Number(valorDe('item-taxa-iva')) || 0;
+  const taxa = Number(SegGroup.valor('item-taxa-iva')) || 0;
 
   if (cents === null || cents <= 0) {
     alvo.innerHTML = 'Indique um preço para ver a decomposição.';
@@ -557,7 +557,7 @@ async function loadGeneralConfig() {
     definirValor('config-rest-nome', config.nome || '');
     definirValor('config-rest-nif', config.nif || '');
     taxaIVAOmissao = config.taxa_iva_omissao_bp ?? 1300;
-    definirValor('config-taxa-iva-omissao', String(taxaIVAOmissao));
+    SegGroup.definir('config-taxa-iva-omissao', taxaIVAOmissao);
     definirValor('config-rest-domain', config.domain || '');
 
     // Identidade visual
@@ -630,7 +630,7 @@ async function handleSaveGeneralConfig(e) {
     payload.cor_primaria = valorDe('config-cor-primaria-hex');
     payload.descricao_curta = valorDe('config-descricao-curta');
     payload.mostrar_marca_plataforma = lerCheck('config-mostrar-marca');
-    payload.taxa_iva_omissao_bp = Number(valorDe('config-taxa-iva-omissao')) || 0;
+    payload.taxa_iva_omissao_bp = Number(SegGroup.valor('config-taxa-iva-omissao')) || 0;
 
     await api('/api/admin/config', { metodo: 'PUT', corpo: payload });
     showToast('Configurações guardadas.', 'success');
@@ -1044,7 +1044,8 @@ function setupEventListeners() {
   });
   ligar('item-preco', 'input', actualizarDetalheIVA);
   ligar('item-preco-desconto', 'input', actualizarDetalheIVA);
-  ligar('item-taxa-iva', 'change', actualizarDetalheIVA);
+  SegGroup.ligar('item-taxa-iva', actualizarDetalheIVA);
+  SegGroup.ligar('config-taxa-iva-omissao');
 
   ligar('payments-form', 'submit', handleSavePayments);
   ligar('btn-refresh-orders', 'click', loadOrders);

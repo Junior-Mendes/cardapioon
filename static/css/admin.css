@@ -276,7 +276,10 @@
   margin-bottom: 1.25rem;
 }
 
-.form-group label {
+/* .form-label existe para rótulos que não apontam para um input — por exemplo o
+   selector segmentado, que é um radiogroup de botões e não um campo. */
+.form-group label,
+.form-group .form-label {
   display: block;
   font-weight: 500;
   margin-bottom: 0.5rem;
