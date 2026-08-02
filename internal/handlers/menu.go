@@ -9,6 +9,7 @@ import (
 
 	"cardapio-online/internal/middleware"
 	"cardapio-online/internal/models"
+	"cardapio-online/internal/validate"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -40,17 +41,37 @@ func (h *Handler) GetPublicMenu(c *gin.Context) {
 		return
 	}
 
+	restaurante := gin.H{
+		"nome": t.Nome,
+		"slug": t.Slug,
+		// Métodos aceites na caixa. No MVP o serviço é sempre levantamento ao balcão
+		// com pagamento no local.
+		"dinheiro_ativo": t.DinheiroAtivo,
+		"cartao_ativo":   t.CartaoDebitoAtivo,
+		"tipo_servico":   "levantamento",
+
+		// Identidade visual: é isto que faz o storefront parecer do restaurante e não
+		// da plataforma.
+		"logo_url":                 t.LogoURL,
+		"descricao_curta":          t.DescricaoCurta,
+		"mostrar_marca_plataforma": t.MostrarMarcaPlataforma,
+		"iniciais":                 iniciaisDe(t.Nome),
+	}
+
+	if t.CorPrimaria != "" {
+		restaurante["cor_primaria"] = t.CorPrimaria
+		// A cor de texto é calculada no servidor a partir da luminância: o lojista escolhe
+		// a cor da marca sem pensar em contraste, e uma cor clara com texto branco por
+		// cima tornaria o botão de encomendar ilegível.
+		restaurante["cor_texto_sobre_primaria"] = validate.TextoSobreCor(t.CorPrimaria)
+	}
+	if t.CorSecundaria != "" {
+		restaurante["cor_secundaria"] = t.CorSecundaria
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"restaurante": gin.H{
-			"nome": t.Nome,
-			"slug": t.Slug,
-			// Métodos aceites na caixa. No MVP o serviço é sempre levantamento ao balcão
-			// com pagamento no local.
-			"dinheiro_ativo": t.DinheiroAtivo,
-			"cartao_ativo":   t.CartaoDebitoAtivo,
-			"tipo_servico":   "levantamento",
-		},
-		"itens": itens,
+		"restaurante": restaurante,
+		"itens":       itens,
 	})
 }
 
@@ -116,6 +137,36 @@ func (in *menuItemInput) aplicar(item *models.MenuItem) {
 // calculado em Go.
 func arredondarCentimos(v float64) float64 {
 	return float64(int64(v*100+0.5)) / 100
+}
+
+// iniciaisDe devolve até duas iniciais do nome, usadas como logótipo de recurso quando o
+// restaurante ainda não carregou um. Melhor do que a letra "C" da plataforma, que era o
+// que aparecia antes.
+func iniciaisDe(nome string) string {
+	palavras := strings.Fields(nome)
+	var iniciais []rune
+
+	for _, p := range palavras {
+		r := []rune(p)
+		if len(r) == 0 {
+			continue
+		}
+		// Ignora ligações comuns em nomes portugueses: "Tasca do Bairro" -> "TB".
+		minuscula := strings.ToLower(p)
+		if len(iniciais) > 0 && (minuscula == "do" || minuscula == "da" || minuscula == "de" ||
+			minuscula == "dos" || minuscula == "das" || minuscula == "e" || minuscula == "&") {
+			continue
+		}
+		iniciais = append(iniciais, []rune(strings.ToUpper(string(r[0])))[0])
+		if len(iniciais) == 2 {
+			break
+		}
+	}
+
+	if len(iniciais) == 0 {
+		return "?"
+	}
+	return string(iniciais)
 }
 
 // CreateMenuItem cria um item de cardápio.

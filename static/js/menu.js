@@ -78,6 +78,9 @@ async function loadRestaurantMenu() {
     if (!res.ok) throw new Error('Não foi possível carregar o cardápio deste restaurante.');
     
     menuData = await res.json();
+    // O branding é aplicado antes de renderizar, para que o cliente não veja um instante
+    // com as cores da plataforma antes de as do restaurante entrarem.
+    aplicarBranding(menuData.restaurante);
     renderRestaurantHeader();
     renderCategories();
     renderProducts();
@@ -94,11 +97,11 @@ async function loadRestaurantMenu() {
   }
 }
 
-// Renderiza o cabeçalho do restaurante
+// Renderiza o cabeçalho do restaurante.
+// O logótipo e as cores são tratados por branding.js.
 function renderRestaurantHeader() {
   const rest = menuData.restaurante;
   document.getElementById('rest-name').innerText = rest.nome;
-  document.getElementById('rest-title').innerText = rest.nome;
 }
 
 // Renderiza a barra de categorias

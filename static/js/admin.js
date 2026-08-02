@@ -514,6 +514,12 @@ async function loadGeneralConfig() {
     definirValor('config-rest-nif', config.nif || '');
     definirValor('config-rest-domain', config.domain || '');
 
+    // Identidade visual
+    definirValor('config-logo-url', config.logo_url || '');
+    definirValor('config-descricao-curta', config.descricao_curta || '');
+    definirCheck('config-mostrar-marca', config.mostrar_marca_plataforma !== false);
+    definirCorPrimaria(config.cor_primaria || '');
+
     const link = document.getElementById('lbl-subdomain-link');
     if (link) {
       const url = config.storefront_url || '#';
@@ -570,6 +576,13 @@ async function handleSaveGeneralConfig(e) {
   try {
     const payload = { nome };
     if (nifEl) payload.nif = nifEl.value.trim();
+
+    // Identidade visual. Enviados sempre juntos, para que limpar um campo o limpe de facto
+    // (o servidor distingue ausente de vazio).
+    payload.logo_url = valorDe('config-logo-url');
+    payload.cor_primaria = valorDe('config-cor-primaria-hex');
+    payload.descricao_curta = valorDe('config-descricao-curta');
+    payload.mostrar_marca_plataforma = lerCheck('config-mostrar-marca');
 
     await api('/api/admin/config', { metodo: 'PUT', corpo: payload });
     showToast('Configurações guardadas.', 'success');
@@ -646,6 +659,76 @@ async function handleVerifyDomain() {
     wrapper.style.color = '#ff4757';
     wrapper.innerText = err.message;
   }
+}
+
+// --- Identidade visual ---
+
+function valorDe(id) {
+  const el = document.getElementById(id);
+  return el ? el.value.trim() : '';
+}
+
+// definirCorPrimaria sincroniza o selector de cor, o campo hexadecimal e a pré-visualização.
+function definirCorPrimaria(cor) {
+  const seletor = document.getElementById('config-cor-primaria');
+  const hex = document.getElementById('config-cor-primaria-hex');
+  if (!seletor || !hex) return;
+
+  if (cor) {
+    seletor.value = cor;
+    hex.value = cor;
+  } else {
+    hex.value = '';
+  }
+  actualizarPreviewCor();
+}
+
+// actualizarPreviewCor mostra ao lojista como fica o botão com a cor escolhida.
+//
+// Calcula o contraste da mesma forma que o servidor: uma cor de marca clara com texto
+// branco por cima torna o botão de encomendar ilegível, e o lojista escolhe a cor sem
+// pensar nisso.
+function actualizarPreviewCor() {
+  const preview = document.getElementById('preview-cor');
+  const texto = document.getElementById('preview-cor-texto');
+  const aviso = document.getElementById('preview-cor-aviso');
+  if (!preview || !texto) return;
+
+  const cor = valorDe('config-cor-primaria-hex') || '#e63946';
+  const rgb = corParaRGB(cor);
+  if (!rgb) return;
+
+  const luminancia = luminanciaRelativa(rgb);
+  const corTexto = luminancia > 0.45 ? '#111111' : '#ffffff';
+
+  preview.style.background = cor;
+  texto.style.color = corTexto;
+
+  if (aviso) {
+    aviso.style.color = corTexto;
+    aviso.textContent = luminancia > 0.45
+      ? 'Cor clara: usamos texto escuro por cima'
+      : 'Cor escura: usamos texto claro por cima';
+  }
+}
+
+function corParaRGB(hex) {
+  const h = String(hex).replace('#', '');
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  return [
+    parseInt(h.slice(0, 2), 16),
+    parseInt(h.slice(2, 4), 16),
+    parseInt(h.slice(4, 6), 16),
+  ];
+}
+
+// luminanciaRelativa segue a definição da WCAG, igual à do servidor.
+function luminanciaRelativa([r, g, b]) {
+  const canal = (v) => {
+    const s = v / 255;
+    return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * canal(r) + 0.7152 * canal(g) + 0.0722 * canal(b);
 }
 
 // --- Utilizadores ---
@@ -790,6 +873,22 @@ function setupEventListeners() {
   ligar('user-form', 'submit', handleSaveUser);
 
   ligar('general-config-form', 'submit', handleSaveGeneralConfig);
+
+  // Identidade visual: selector e campo hexadecimal mantêm-se sincronizados.
+  ligar('config-cor-primaria', 'input', (e) => {
+    definirValor('config-cor-primaria-hex', e.target.value);
+    actualizarPreviewCor();
+  });
+  ligar('config-cor-primaria-hex', 'input', () => {
+    const v = valorDe('config-cor-primaria-hex');
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) definirValor('config-cor-primaria', v);
+    actualizarPreviewCor();
+  });
+  ligar('btn-limpar-cor', 'click', () => {
+    definirValor('config-cor-primaria-hex', '');
+    actualizarPreviewCor();
+    showToast('A cor volta ao padrão ao guardar.', 'info');
+  });
   ligar('btn-save-domain', 'click', handleSaveDomain);
   ligar('btn-check-dns', 'click', handleVerifyDomain);
 }

@@ -16,6 +16,16 @@ const (
 type Tenant struct {
 	ID   uint   `gorm:"primaryKey;autoIncrement" json:"id"`
 	Nome string `gorm:"type:varchar(150);not null" json:"nome"`
+
+	// Identidade visual do restaurante (white label). O storefront usa estes valores em
+	// vez da marca da plataforma: quem encomenda deve ver a marca do restaurante.
+	LogoURL        string `gorm:"type:varchar(1000)" json:"logo_url"`
+	CorPrimaria    string `gorm:"type:char(7)" json:"cor_primaria"`
+	CorSecundaria  string `gorm:"type:char(7)" json:"cor_secundaria"`
+	DescricaoCurta string `gorm:"type:varchar(200)" json:"descricao_curta"`
+	// MostrarMarcaPlataforma controla a assinatura discreta no fundo do storefront.
+	MostrarMarcaPlataforma bool `gorm:"not null;default:true" json:"mostrar_marca_plataforma"`
+
 	// NIF do estabelecimento. Necessário para a facturação da subscrição e para os
 	// documentos que o restaurante emite.
 	NIF  string `gorm:"type:varchar(20)" json:"nif"`

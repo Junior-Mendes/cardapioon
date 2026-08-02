@@ -266,9 +266,14 @@ func (h *Handler) GetOrderPublico(c *gin.Context) {
 	}
 
 	var t models.Tenant
-	if err := h.DB.Select("nome", "slug").First(&t, p.TenantID).Error; err != nil {
+	if err := h.DB.First(&t, p.TenantID).Error; err != nil {
 		h.erroInterno(c, "carregar restaurante da encomenda", err)
 		return
+	}
+
+	corTexto := ""
+	if t.CorPrimaria != "" {
+		corTexto = validate.TextoSobreCor(t.CorPrimaria)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -276,7 +281,14 @@ func (h *Handler) GetOrderPublico(c *gin.Context) {
 		"public_token":     p.PublicToken,
 		"restaurante_nome": t.Nome,
 		"restaurante_slug": t.Slug,
-		"cliente_nome":     p.ClienteNome,
+
+		// Identidade visual: a página de acompanhamento é do restaurante, não da plataforma.
+		"restaurante_logo_url":     t.LogoURL,
+		"restaurante_cor_primaria": t.CorPrimaria,
+		"restaurante_cor_texto":    corTexto,
+		"restaurante_iniciais":     iniciaisDe(t.Nome),
+		"mostrar_marca_plataforma": t.MostrarMarcaPlataforma,
+		"cliente_nome":             p.ClienteNome,
 		// Telefone mascarado: quem tem o link confirma que é a sua encomenda sem que o
 		// número completo fique exposto.
 		"cliente_telefone": p.TelefoneMascarado(),

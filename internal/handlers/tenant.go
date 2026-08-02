@@ -44,6 +44,13 @@ func (h *Handler) GetConfig(c *gin.Context) {
 		"cartao_ativo":       t.CartaoDebitoAtivo,
 		"main_domain":        h.Cfg.MainDomain,
 		"storefront_url":     fmt.Sprintf("https://%s.%s/menu", t.Slug, h.Cfg.MainDomain),
+
+		// Identidade visual
+		"logo_url":                 t.LogoURL,
+		"cor_primaria":             t.CorPrimaria,
+		"cor_secundaria":           t.CorSecundaria,
+		"descricao_curta":          t.DescricaoCurta,
+		"mostrar_marca_plataforma": t.MostrarMarcaPlataforma,
 	})
 }
 
@@ -54,6 +61,13 @@ type updateConfigInput struct {
 	// que representa o terminal de pagamento físico.
 	DinheiroAtivo *bool `json:"dinheiro_ativo"`
 	CartaoAtivo   *bool `json:"cartao_ativo"`
+
+	// Identidade visual do restaurante.
+	LogoURL                *string `json:"logo_url"`
+	CorPrimaria            *string `json:"cor_primaria"`
+	CorSecundaria          *string `json:"cor_secundaria"`
+	DescricaoCurta         *string `json:"descricao_curta"`
+	MostrarMarcaPlataforma *bool   `json:"mostrar_marca_plataforma"`
 }
 
 // UpdateConfig actualiza os dados do restaurante.
@@ -101,6 +115,38 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 	}
 	if in.CartaoAtivo != nil {
 		campos["cartao_debito_ativo"] = *in.CartaoAtivo
+	}
+
+	// --- Identidade visual ---
+	if in.LogoURL != nil {
+		logo, err := validate.LogoURL(*in.LogoURL)
+		if err != nil {
+			erroCliente(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		campos["logo_url"] = logo
+	}
+	if in.CorPrimaria != nil {
+		cor, err := validate.CorHex(*in.CorPrimaria)
+		if err != nil {
+			erroCliente(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		campos["cor_primaria"] = cor
+	}
+	if in.CorSecundaria != nil {
+		cor, err := validate.CorHex(*in.CorSecundaria)
+		if err != nil {
+			erroCliente(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		campos["cor_secundaria"] = cor
+	}
+	if in.DescricaoCurta != nil {
+		campos["descricao_curta"] = limparLinha(*in.DescricaoCurta, 200)
+	}
+	if in.MostrarMarcaPlataforma != nil {
+		campos["mostrar_marca_plataforma"] = *in.MostrarMarcaPlataforma
 	}
 
 	if len(campos) == 0 {

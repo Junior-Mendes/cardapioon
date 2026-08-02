@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cardápio Online - Faça Seu Pedido</title>
+  <!-- O título é substituído pelo nome do restaurante em branding.js. -->
+  <title>Menu</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <link rel="stylesheet" href="/static/css/menu.css">
 </head>
@@ -16,8 +17,8 @@
   <header style="border-bottom: 1px solid var(--border-color); padding: 1.25rem 2rem; background: var(--bg-secondary);">
     <div style="max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center;">
       <div class="logo-container">
-        <div class="logo-icon">C</div>
-        <div class="logo-text" id="rest-title">Carregando...</div>
+        <div class="logo-icon" style="border-radius:var(--radius-sm); overflow:hidden;">·</div>
+        <div class="logo-text" id="rest-title">&nbsp;</div>
       </div>
       <a href="/" style="font-size:0.9rem; color:var(--text-muted); text-decoration:none;">Criar meu Cardápio</a>
     </div>
@@ -29,7 +30,8 @@
       <!-- Banner do Restaurante -->
       <div class="restaurant-banner" id="restaurant-banner">
         <span class="restaurant-badge">Aberto para Retirada</span>
-        <h1 class="restaurant-name" id="rest-name">Nome do Restaurante</h1>
+        <h1 class="restaurant-name" id="rest-name">&nbsp;</h1>
+        <p id="rest-tagline" style="display:none; color:var(--text-muted); font-size:0.9rem; margin-top:0.25rem;"></p>
       </div>
 
       <!-- Barra de Categorias -->
@@ -144,6 +146,10 @@
   </div>
 
   <script src="/static/js/common.js"></script>
+  <script src="/static/js/branding.js"></script>
   <script src="/static/js/menu.js"></script>
+  <footer id="marca-plataforma" style="text-align:center; padding:2rem 1rem 3rem; color:var(--text-muted); font-size:0.78rem;">
+    Encomendas por <a href="/" style="color:var(--text-muted); text-decoration:underline;">MenuOnline</a>
+  </footer>
 </body>
 </html>

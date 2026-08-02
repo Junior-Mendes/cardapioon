@@ -62,6 +62,16 @@ async function loadOrderDetails() {
 }
 
 function renderOrderDetails(order) {
+  // A página de acompanhamento também é do restaurante, não da plataforma.
+  aplicarBranding({
+    nome: order.restaurante_nome,
+    logo_url: order.restaurante_logo_url,
+    cor_primaria: order.restaurante_cor_primaria,
+    cor_texto_sobre_primaria: order.restaurante_cor_texto,
+    iniciais: order.restaurante_iniciais,
+    mostrar_marca_plataforma: order.mostrar_marca_plataforma,
+  });
+
   document.getElementById('track-rest-name').innerText = order.restaurante_nome;
   document.getElementById('track-order-id').innerText = `#${order.numero}`;
 
