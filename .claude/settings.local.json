@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/tmp/claude-0/-root-cardapio/74fd0bc2-3fa1-4fc8-97b9-4817c2a414cc/scratchpad/gorun.sh go *)",
+      "Bash(/tmp/claude-0/-root-cardapio/74fd0bc2-3fa1-4fc8-97b9-4817c2a414cc/scratchpad/gorun.sh gofmt *)",
+      "Bash(/tmp/claude-0/-root-cardapio/74fd0bc2-3fa1-4fc8-97b9-4817c2a414cc/scratchpad/gotest.sh ./...)"
+    ]
+  }
+}

@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+
+    # Os testes de isolamento de tenant correm contra MySQL real: o GORM gera SQL
+    # específico do dialecto, pelo que um SQLite em memória não provaria o mesmo.
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: cardapio_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Formatação
+        run: |
+          naoFormatados=$(gofmt -l .)
+          if [ -n "$naoFormatados" ]; then
+            echo "Ficheiros não formatados:"
+            echo "$naoFormatados"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Análise de segurança (gosec)
+        uses: securego/gosec@master
+        with:
+          args: -exclude-generated ./...
+
+      - name: Testes com detector de corridas
+        env:
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_PORT: '3306'
+          TEST_DB_USER: root
+          TEST_DB_PASSWORD: root
+          TEST_DB_NAME: cardapio_test
+        run: go test -race -coverprofile=cobertura.out ./...
+
+      - name: Cobertura
+        run: go tool cover -func=cobertura.out | tail -1
+
+      # Falha o build se os testes de isolamento de tenant tiverem sido ignorados por
+      # falta de base de dados: um skip silencioso deixaria passar uma regressão de
+      # segurança sem que ninguém notasse.
+      - name: Confirmar que os testes de isolamento correram
+        env:
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_PORT: '3306'
+          TEST_DB_USER: root
+          TEST_DB_PASSWORD: root
+          TEST_DB_NAME: cardapio_test
+        run: |
+          saida=$(go test -v -run 'TestTokenLegadoForjadoNaoDaAcesso|TestHostDeOutroTenantNaoMudaOEscopo' ./internal/handlers/...)
+          echo "$saida"
+          if echo "$saida" | grep -q '^--- SKIP'; then
+            echo "ERRO: testes de isolamento de tenant foram ignorados"
+            exit 1
+          fi
+
+  build-imagem:
+    runs-on: ubuntu-latest
+    needs: verificar
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build da imagem Docker
+        run: docker build -t cardapio-api:${{ github.sha }} .

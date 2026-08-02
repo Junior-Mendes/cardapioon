@@ -2,251 +2,440 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
-	"cardapio-online/internal/db"
 	"cardapio-online/internal/middleware"
 	"cardapio-online/internal/models"
+	"cardapio-online/internal/validate"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
-type OrderHandler struct{}
+// Métodos de pagamento suportados. O Pix foi removido: não existe em Portugal e era
+// marcado como pago sem qualquer verificação, o que permitia fechar encomendas sem pagar.
+const (
+	PagamentoDinheiroEntrega = "dinheiro"
+	PagamentoTPAEntrega      = "tpa"
+	PagamentoCartaoOnline    = "cartao"
+)
 
-func NewOrderHandler() *OrderHandler {
-	return &OrderHandler{}
-}
+const maxItensPorEncomenda = 100
 
-type OrderItemInput struct {
+type orderItemInput struct {
 	MenuItemID uint `json:"menu_item_id" binding:"required"`
-	Quantidade int  `json:"quantidade" binding:"required,gt=0"`
+	Quantidade int  `json:"quantidade" binding:"required,gt=0,lte=99"`
 }
 
-type CreateOrderInput struct {
-	ClienteNome          string           `json:"cliente_nome" binding:"required"`
-	ClienteTelefone      string           `json:"cliente_telefone" binding:"required"`
-	FormaPagamento       string           `json:"forma_pagamento" binding:"required"` // pix, cartao_credito, retirada_dinheiro, retirada_cartao
-	TrocoPara            float64          `json:"troco_para"`
-	CartaoUltimosDigitos string           `json:"cartao_ultimos_digitos"`
-	Itens                []OrderItemInput `json:"itens" binding:"required,gt=0"`
+type createOrderInput struct {
+	ClienteNome     string           `json:"cliente_nome" binding:"required,min=2,max=150"`
+	ClienteTelefone string           `json:"cliente_telefone" binding:"required"`
+	FormaPagamento  string           `json:"forma_pagamento" binding:"required"`
+	TrocoPara       float64          `json:"troco_para" binding:"gte=0"`
+	Itens           []orderItemInput `json:"itens" binding:"required,min=1"`
 }
 
-// CreateOrder cria um novo pedido para retirada
-func (h *OrderHandler) CreateOrder(c *gin.Context) {
-	tenant, err := ResolveTenant(c)
+// CreateOrder cria uma encomenda.
+func (h *Handler) CreateOrder(c *gin.Context) {
+	t, err := h.tenantDoContexto(c)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Restaurante não localizado"})
+		erroCliente(c, http.StatusNotFound, "Restaurante não encontrado")
 		return
 	}
 
-	var input CreateOrderInput
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Dados do pedido inválidos: " + err.Error()})
+	var in createOrderInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		erroCliente(c, http.StatusBadRequest, "Dados da encomenda inválidos")
+		return
+	}
+	if len(in.Itens) > maxItensPorEncomenda {
+		erroCliente(c, http.StatusBadRequest, "Demasiados itens na encomenda")
 		return
 	}
 
-	// Valida se o método de pagamento selecionado está ativo no lojista
-	switch input.FormaPagamento {
-	case "pix":
-		if !tenant.PixAtivo {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Pagamento por PIX não está disponível neste estabelecimento"})
+	telefone, err := validate.TelefonePortugues(in.ClienteTelefone)
+	if err != nil {
+		erroCliente(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := h.validarMetodoPagamento(t, in.FormaPagamento); err != nil {
+		erroCliente(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Idempotência: um duplo-toque no botão de finalizar criava duas encomendas.
+	chaveIdem := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if chaveIdem != "" {
+		if len(chaveIdem) > 64 {
+			erroCliente(c, http.StatusBadRequest, "Idempotency-Key demasiado longa")
 			return
 		}
-	case "cartao_credito":
-		if !tenant.CartaoCreditoAtivo {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Pagamento online por Cartão de Crédito não disponível"})
+		var existente models.Pedido
+		err := h.DB.Where("tenant_id = ? AND idempotency_key = ?", t.ID, chaveIdem).
+			Preload("Itens").First(&existente).Error
+		if err == nil {
+			c.JSON(http.StatusOK, respostaEncomendaCriada(&existente))
 			return
 		}
-	case "retirada_dinheiro":
-		if !tenant.DinheiroAtivo {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Pagamento em dinheiro na retirada não disponível"})
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			h.erroInterno(c, "verificar idempotência da encomenda", err)
 			return
 		}
-	case "retirada_cartao":
-		if !tenant.CartaoDebitoAtivo {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Pagamento em cartão na maquininha na retirada não disponível"})
-			return
+	}
+
+	// Agrupa quantidades por produto para que o mesmo item repetido no payload não
+	// produza várias linhas na encomenda.
+	quantidades := map[uint]int{}
+	var ordem []uint
+	for _, item := range in.Itens {
+		if _, visto := quantidades[item.MenuItemID]; !visto {
+			ordem = append(ordem, item.MenuItemID)
+		}
+		quantidades[item.MenuItemID] += item.Quantidade
+	}
+
+	agora := time.Now()
+	pedido := models.Pedido{
+		TenantID:        t.ID,
+		PublicToken:     uuid.NewString(),
+		ClienteNome:     limparLinha(in.ClienteNome, 150),
+		ClienteTelefone: telefone,
+		Status:          models.StatusPendente,
+		FormaPagamento:  in.FormaPagamento,
+		TrocoPara:       arredondarCentimos(in.TrocoPara),
+		CreatedAt:       agora,
+		UpdatedAt:       agora,
+	}
+	if chaveIdem != "" {
+		pedido.IdempotencyKey = &chaveIdem
+	}
+
+	err = h.DB.Transaction(func(tx *gorm.DB) error {
+		var total float64
+		var itens []models.OrderItem
+
+		for _, menuItemID := range ordem {
+			qtd := quantidades[menuItemID]
+
+			// O preço vem sempre da base de dados, com o tenant no filtro: o cliente não
+			// pode indicar preços nem comprar produtos de outro restaurante.
+			var mi models.MenuItem
+			if err := tx.Where("id = ? AND tenant_id = ? AND disponivel = ?",
+				menuItemID, t.ID, true).First(&mi).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return fmt.Errorf("%w: %d", errItemIndisponivel, menuItemID)
+				}
+				return err
+			}
+
+			preco := mi.Preco
+			if mi.DescontoAtivo && mi.PrecoDesconto > 0 && mi.PrecoDesconto < mi.Preco {
+				preco = mi.PrecoDesconto
+			}
+
+			total += preco * float64(qtd)
+			itens = append(itens, models.OrderItem{
+				Nome:          mi.Nome,
+				Quantidade:    qtd,
+				PrecoUnitario: preco,
+				CreatedAt:     agora,
+			})
+		}
+
+		pedido.ValorTotal = arredondarCentimos(total)
+
+		if pedido.FormaPagamento == PagamentoDinheiroEntrega &&
+			pedido.TrocoPara > 0 && pedido.TrocoPara < pedido.ValorTotal {
+			return errTrocoInsuficiente
+		}
+
+		if err := tx.Create(&pedido).Error; err != nil {
+			return err
+		}
+		for i := range itens {
+			itens[i].PedidoID = pedido.ID
+		}
+		// Insert em lote: a versão anterior fazia uma query por item.
+		if err := tx.Create(&itens).Error; err != nil {
+			return err
+		}
+		pedido.Itens = itens
+		return nil
+	})
+
+	switch {
+	case errors.Is(err, errItemIndisponivel):
+		erroCliente(c, http.StatusBadRequest, "Um dos produtos já não está disponível. Actualize o cardápio.")
+		return
+	case errors.Is(err, errTrocoInsuficiente):
+		erroCliente(c, http.StatusBadRequest, "O valor indicado para troco é inferior ao total da encomenda")
+		return
+	case err != nil:
+		// Uma colisão na chave de idempotência significa que outro pedido concorrente
+		// ganhou a corrida; devolvemos a encomenda que ele criou.
+		if chaveIdem != "" && strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			var existente models.Pedido
+			if e := h.DB.Where("tenant_id = ? AND idempotency_key = ?", t.ID, chaveIdem).
+				Preload("Itens").First(&existente).Error; e == nil {
+				c.JSON(http.StatusOK, respostaEncomendaCriada(&existente))
+				return
+			}
+		}
+		h.erroInterno(c, "criar encomenda", err)
+		return
+	}
+
+	c.JSON(http.StatusCreated, respostaEncomendaCriada(&pedido))
+}
+
+var (
+	errItemIndisponivel  = errors.New("item indisponível")
+	errTrocoInsuficiente = errors.New("troco insuficiente")
+)
+
+// validarMetodoPagamento confirma que o método está activo no restaurante.
+func (h *Handler) validarMetodoPagamento(t *models.Tenant, metodo string) error {
+	switch metodo {
+	case PagamentoDinheiroEntrega:
+		if !t.DinheiroAtivo {
+			return errors.New("pagamento em dinheiro não disponível neste restaurante")
+		}
+	case PagamentoTPAEntrega:
+		if !t.CartaoDebitoAtivo {
+			return errors.New("pagamento por multibanco na entrega não disponível neste restaurante")
+		}
+	case PagamentoCartaoOnline:
+		if !t.CartaoCreditoAtivo {
+			return errors.New("pagamento online por cartão não disponível neste restaurante")
 		}
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Método de pagamento inválido"})
+		return errors.New("método de pagamento inválido")
+	}
+	return nil
+}
+
+// respostaEncomendaCriada devolve o payload de confirmação, incluindo o token público de
+// rastreio (o ID sequencial não é utilizável para consultar a encomenda).
+func respostaEncomendaCriada(p *models.Pedido) gin.H {
+	return gin.H{
+		"message": "Encomenda registada",
+		"encomenda": gin.H{
+			"numero":       p.ID,
+			"public_token": p.PublicToken,
+			"valor_total":  p.ValorTotal,
+			"status":       p.Status,
+			"tracking_url": "/pedido?t=" + p.PublicToken,
+		},
+	}
+}
+
+// GetOrderPublico devolve o estado de uma encomenda a partir do token opaco.
+//
+// A rota anterior aceitava o ID sequencial sem qualquer escopo, pelo que iterar de 1 a N
+// extraía nome, telefone e forma de pagamento de todas as encomendas da plataforma.
+func (h *Handler) GetOrderPublico(c *gin.Context) {
+	token := strings.TrimSpace(c.Param("token"))
+	if token == "" {
+		token = strings.TrimSpace(c.Query("t"))
+	}
+	// Um token válido é um UUID; validar o formato evita percorrer a tabela com input
+	// arbitrário.
+	if _, err := uuid.Parse(token); err != nil {
+		erroCliente(c, http.StatusNotFound, "Encomenda não encontrada")
 		return
 	}
 
-	// Inicia transação de banco de dados
-	tx := db.DB.Begin()
+	var p models.Pedido
+	if err := h.DB.Preload("Itens").Where("public_token = ?", token).First(&p).Error; err != nil {
+		erroCliente(c, http.StatusNotFound, "Encomenda não encontrada")
+		return
+	}
 
-	var valorTotal float64 = 0
-	var orderItems []models.OrderItem
+	var t models.Tenant
+	if err := h.DB.Select("nome", "slug").First(&t, p.TenantID).Error; err != nil {
+		h.erroInterno(c, "carregar restaurante da encomenda", err)
+		return
+	}
 
-	// Busca os itens no cardápio para calcular o preço real e validar se estão disponíveis
-	for _, itemInput := range input.Itens {
-		var menuItem models.MenuItem
-		if err := tx.Where("id = ? AND tenant_id = ? AND disponivel = ?", itemInput.MenuItemID, tenant.ID, true).First(&menuItem).Error; err != nil {
-			tx.Rollback()
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Item do cardápio inválido ou indisponível: ID " + strconv.Itoa(int(itemInput.MenuItemID))})
+	c.JSON(http.StatusOK, gin.H{
+		"numero":           p.ID,
+		"public_token":     p.PublicToken,
+		"restaurante_nome": t.Nome,
+		"restaurante_slug": t.Slug,
+		"cliente_nome":     p.ClienteNome,
+		// Telefone mascarado: quem tem o link confirma que é a sua encomenda sem que o
+		// número completo fique exposto.
+		"cliente_telefone": p.TelefoneMascarado(),
+		"status":           p.Status,
+		"valor_total":      p.ValorTotal,
+		"forma_pagamento":  p.FormaPagamento,
+		"troco_para":       p.TrocoPara,
+		"created_at":       p.CreatedAt,
+		"itens":            p.Itens,
+	})
+}
+
+// GetAdminOrders lista as encomendas do restaurante, com paginação e filtros.
+//
+// A versão anterior devolvia todas as encomendas com os respectivos itens, e o painel
+// pedia essa lista a cada dez segundos.
+func (h *Handler) GetAdminOrders(c *gin.Context) {
+	pagina := maxInt(1, atoiOmissao(c.Query("pagina"), 1))
+	porPagina := clamp(atoiOmissao(c.Query("por_pagina"), 30), 1, 100)
+
+	consulta := h.DB.Model(&models.Pedido{}).Scopes(middleware.TenantScope(c))
+
+	if s := c.Query("status"); s != "" {
+		if !models.StatusValidos[models.PedidoStatus(s)] {
+			erroCliente(c, http.StatusBadRequest, "Estado inválido")
 			return
 		}
-
-		// Determina o preço unitário considerando se há desconto ativo
-		precoUnitario := menuItem.Preco
-		if menuItem.DescontoAtivo && menuItem.PrecoDesconto > 0 {
-			precoUnitario = menuItem.PrecoDesconto
-		}
-
-		valorTotal += precoUnitario * float64(itemInput.Quantidade)
-
-		orderItems = append(orderItems, models.OrderItem{
-			Nome:          menuItem.Nome,
-			Quantidade:    itemInput.Quantidade,
-			PrecoUnitario: precoUnitario,
-			CreatedAt:     time.Now(),
-		})
+		consulta = consulta.Where("status = ?", s)
 	}
-
-	// Cria a struct do Pedido
-	pedido := models.Pedido{
-		TenantID:             tenant.ID,
-		ClienteNome:          input.ClienteNome,
-		ClienteTelefone:      input.ClienteTelefone,
-		Status:               models.StatusPendente,
-		ValorTotal:           valorTotal,
-		FormaPagamento:       input.FormaPagamento,
-		TrocoPara:            input.TrocoPara,
-		PixPago:              input.FormaPagamento == "pix", // Simulado: Pix é marcado como pago se selecionado
-		CartaoUltimosDigitos: input.CartaoUltimosDigitos,
-		CreatedAt:            time.Now(),
-		UpdatedAt:            time.Now(),
-	}
-
-	if err := tx.Create(&pedido).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Falha ao criar registro do pedido: " + err.Error()})
-		return
-	}
-
-	// Insere os itens do pedido associando com o ID recém-criado
-	for i := range orderItems {
-		orderItems[i].PedidoID = pedido.ID
-		if err := tx.Create(&orderItems[i]).Error; err != nil {
-			tx.Rollback()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Falha ao registrar itens do pedido: " + err.Error()})
+	if desde := c.Query("desde"); desde != "" {
+		d, err := time.Parse("2006-01-02", desde)
+		if err != nil {
+			erroCliente(c, http.StatusBadRequest, "Data inicial inválida (use AAAA-MM-DD)")
 			return
 		}
+		consulta = consulta.Where("created_at >= ?", d)
 	}
 
-	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao confirmar transação do banco"})
+	var total int64
+	if err := consulta.Count(&total).Error; err != nil {
+		h.erroInterno(c, "contar encomendas", err)
 		return
 	}
 
-	// Retorna o pedido criado com sucesso
-	c.JSON(http.StatusCreated, gin.H{
-		"message": "Pedido criado com sucesso!",
-		"order": gin.H{
-			"id":         pedido.ID,
-			"valor_total": pedido.ValorTotal,
-			"status":     pedido.Status,
+	var pedidos []models.Pedido
+	if err := consulta.
+		Preload("Itens").
+		Order("id desc").
+		Limit(porPagina).
+		Offset((pagina - 1) * porPagina).
+		Find(&pedidos).Error; err != nil {
+		h.erroInterno(c, "listar encomendas", err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"encomendas": pedidos,
+		"paginacao": gin.H{
+			"pagina":     pagina,
+			"por_pagina": porPagina,
+			"total":      total,
 		},
 	})
 }
 
-// GetOrder consulta o pedido pelo ID (endpoint público de rastreamento)
-func (h *OrderHandler) GetOrder(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ID de pedido inválido"})
-		return
-	}
-
-	var pedido models.Pedido
-	// Carrega o pedido junto com os itens dele
-	if err := db.DB.Preload("Itens").First(&pedido, id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Pedido não encontrado"})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao consultar pedido"})
-		}
-		return
-	}
-
-	// Busca o nome do restaurante
-	var tenant models.Tenant
-	db.DB.Select("nome, slug").First(&tenant, pedido.TenantID)
-
-	c.JSON(http.StatusOK, gin.H{
-		"id":                     pedido.ID,
-		"restaurante_nome":       tenant.Nome,
-		"restaurante_slug":       tenant.Slug,
-		"cliente_nome":           pedido.ClienteNome,
-		"cliente_telefone":       pedido.ClienteTelefone,
-		"status":                 pedido.Status,
-		"valor_total":            pedido.ValorTotal,
-		"forma_pagamento":        pedido.FormaPagamento,
-		"troco_para":             pedido.TrocoPara,
-		"pix_pago":               pedido.PixPago,
-		"cartao_ultimos_digitos": pedido.CartaoUltimosDigitos,
-		"created_at":             pedido.CreatedAt,
-		"itens":                  pedido.Itens,
-	})
-}
-
-// GetAdminOrders lista todos os pedidos do tenant (painel do lojista)
-func (h *OrderHandler) GetAdminOrders(c *gin.Context) {
-	var pedidos []models.Pedido
-	if err := db.DB.Scopes(middleware.TenantScope(c)).Preload("Itens").Order("id desc").Find(&pedidos).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao buscar pedidos: " + err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, pedidos)
-}
-
-type UpdateStatusInput struct {
+type updateStatusInput struct {
 	Status string `json:"status" binding:"required"`
 }
 
-// UpdateOrderStatus altera o status do pedido (painel do lojista)
-func (h *OrderHandler) UpdateOrderStatus(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 64)
+// transicoesPermitidas define a máquina de estados das encomendas.
+//
+// A versão anterior aceitava qualquer estado a partir de qualquer outro, permitindo
+// reabrir uma encomenda já finalizada ou cancelada.
+var transicoesPermitidas = map[models.PedidoStatus][]models.PedidoStatus{
+	models.StatusPendente:   {models.StatusPreparando, models.StatusCancelado},
+	models.StatusPreparando: {models.StatusPronto, models.StatusCancelado},
+	models.StatusPronto:     {models.StatusFinalizado, models.StatusCancelado},
+	models.StatusFinalizado: {},
+	models.StatusCancelado:  {},
+}
+
+func transicaoValida(de, para models.PedidoStatus) bool {
+	for _, p := range transicoesPermitidas[de] {
+		if p == para {
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateOrderStatus altera o estado de uma encomenda.
+func (h *Handler) UpdateOrderStatus(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ID de pedido inválido"})
+		erroCliente(c, http.StatusBadRequest, "Identificador inválido")
 		return
 	}
 
-	var pedido models.Pedido
-	if err := db.DB.Scopes(middleware.TenantScope(c)).First(&pedido, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Pedido não localizado"})
+	var in updateStatusInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		erroCliente(c, http.StatusBadRequest, "Dados inválidos")
+		return
+	}
+	novo := models.PedidoStatus(in.Status)
+	if !models.StatusValidos[novo] {
+		erroCliente(c, http.StatusBadRequest, "Estado inválido")
 		return
 	}
 
-	var input UpdateStatusInput
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Dados inválidos: " + err.Error()})
+	var p models.Pedido
+	if err := h.DB.Scopes(middleware.TenantScope(c)).Where("id = ?", id).First(&p).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			erroCliente(c, http.StatusNotFound, "Encomenda não encontrada")
+			return
+		}
+		h.erroInterno(c, "procurar encomenda", err)
 		return
 	}
 
-	// Validação de transição de status simples
-	status := models.PedidoStatus(input.Status)
-	if status != models.StatusPendente && status != models.StatusPreparando && status != models.StatusPronto && status != models.StatusFinalizado && status != models.StatusCancelado {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Status informado é inválido"})
+	if p.Status == novo {
+		c.JSON(http.StatusOK, gin.H{"message": "A encomenda já está neste estado", "status": novo})
+		return
+	}
+	if !transicaoValida(p.Status, novo) {
+		erroCliente(c, http.StatusConflict, fmt.Sprintf(
+			"Não é possível mudar de '%s' para '%s'", p.Status, novo))
 		return
 	}
 
-	pedido.Status = status
-	pedido.UpdatedAt = time.Now()
-
-	if err := db.DB.Save(&pedido).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao atualizar status do pedido"})
+	if err := h.DB.Model(&p).Updates(map[string]any{
+		"status":     novo,
+		"updated_at": time.Now(),
+	}).Error; err != nil {
+		h.erroInterno(c, "actualizar estado da encomenda", err)
 		return
 	}
+
+	h.auditar(c, "encomenda_estado_alterado", "pedido", fmt.Sprint(p.ID),
+		fmt.Sprintf("%s -> %s", p.Status, novo))
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "Status do pedido atualizado com sucesso!",
-		"id":      pedido.ID,
-		"status":  pedido.Status,
+		"message": "Estado actualizado",
+		"numero":  p.ID,
+		"status":  novo,
 	})
+}
+
+func atoiOmissao(s string, omissao int) int {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return omissao
+}
+
+func clamp(v, minimo, maximo int) int {
+	if v < minimo {
+		return minimo
+	}
+	if v > maximo {
+		return maximo
+	}
+	return v
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

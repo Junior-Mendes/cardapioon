@@ -1,153 +1,319 @@
 package main
 
 import (
-	"log"
+	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"os"
-	"strings"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"cardapio-online/internal/auth"
 	"cardapio-online/internal/config"
 	"cardapio-online/internal/db"
 	"cardapio-online/internal/handlers"
+	"cardapio-online/internal/mail"
 	"cardapio-online/internal/middleware"
+	"cardapio-online/internal/models"
+	"cardapio-online/internal/traefik"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"gorm.io/gorm"
 )
 
 func main() {
-	// Carrega arquivo .env local se existir
-	if err := godotenv.Load(); err != nil {
-		log.Println("Aviso: arquivo .env não encontrado. Usando variáveis de ambiente do sistema.")
+	if err := executar(); err != nil {
+		slog.Error("falha fatal no arranque", "erro", err)
+		os.Exit(1)
+	}
+}
+
+func executar() error {
+	_ = godotenv.Load()
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		// O logger estruturado ainda não está configurado; escrevemos directamente.
+		return err
 	}
 
-	// 1. Carrega Configurações
-	cfg := config.LoadConfig()
+	configurarLogger(cfg)
 
-	// 2. Inicializa Conexão com o MySQL e roda Migrações (AutoMigrate + Seeders)
-	database := db.InitDB(cfg)
-	sqlDB, err := database.DB()
-	if err == nil {
-		defer sqlDB.Close()
+	slog.Info("a iniciar Cardápio Online",
+		"modo", cfg.GinMode, "dominio", cfg.MainDomain, "porta", cfg.Port)
+
+	gdb, err := db.Init(cfg)
+	if err != nil {
+		return err
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	if err := os.MkdirAll(cfg.UploadDir, 0o755); err != nil {
+		slog.Warn("não foi possível criar o directório de uploads", "dir", cfg.UploadDir, "erro", err)
 	}
 
-	// Garante que a pasta de uploads de imagens exista
-	if err := os.MkdirAll("./static/uploads", 0755); err != nil {
-		log.Printf("Aviso: falha ao criar diretório de uploads: %v", err)
+	tokens, err := auth.NewTokenService(cfg.JWTSecret, cfg.AccessTTL, cfg.RefreshTTL)
+	if err != nil {
+		return err
 	}
 
-	// 3. Inicializa Handlers
-	tenantHandler := handlers.NewTenantHandler()
-	menuHandler := handlers.NewMenuHandler()
-	orderHandler := handlers.NewOrderHandler()
+	resolver := middleware.NewTenantResolver(gdb, cfg.MainDomain)
 
-	// Sincroniza arquivos de rotas do Traefik baseado nos inquilinos ativos
-	handlers.SyncTraefikConfigs()
-
-	// 4. Configura Roteador Gin
-	r := gin.Default()
-
-	// Middleware de CORS e controle de cache
-	r.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Tenant-Slug")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
-		
-		// Desativa cache no navegador para evitar travamento do frontend
-		c.Writer.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-		c.Writer.Header().Set("Pragma", "no-cache")
-		c.Writer.Header().Set("Expires", "0")
-
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
-		c.Next()
+	h := handlers.New(&handlers.Deps{
+		DB:     gdb,
+		Cfg:    cfg,
+		Tokens: tokens,
+		Mailer: mail.New(mail.Config{
+			Host: cfg.SMTPHost, Port: cfg.SMTPPort,
+			User: cfg.SMTPUser, Password: cfg.SMTPPassword,
+			From: cfg.MailFrom, FromName: cfg.MailFromName,
+		}),
+		Traefik:  traefik.NewWriter(cfg.TraefikDynamicDir, cfg.MainDomain, cfg.BackendURL),
+		Resolver: resolver,
 	})
 
-	// Rota de Health Check
+	if err := h.SincronizarRotasTraefik(); err != nil {
+		// Uma falha aqui deixa clientes sem rota, mas o servidor ainda serve o domínio
+		// principal; registamos e continuamos.
+		slog.Error("falha ao sincronizar rotas do Traefik", "erro", err)
+	}
+
+	iniciarLimpezaPeriodica(gdb)
+
+	router := construirRouter(cfg, h, resolver, gdb)
+
+	servidor := &http.Server{
+		Addr:    ":" + cfg.Port,
+		Handler: router,
+		// Sem timeouts, uma ligação lenta ocupa um worker indefinidamente.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	return servirComShutdownGracioso(servidor)
+}
+
+func configurarLogger(cfg *config.Config) {
+	nivel := slog.LevelInfo
+	if cfg.DevMode() {
+		nivel = slog.LevelDebug
+	}
+
+	var handler slog.Handler
+	if cfg.DevMode() {
+		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: nivel})
+	} else {
+		// JSON em produção: pesquisável por tenant_id e request_id em qualquer
+		// agregador de logs.
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: nivel})
+	}
+	slog.SetDefault(slog.New(handler))
+}
+
+func construirRouter(
+	cfg *config.Config,
+	h *handlers.Handler,
+	resolver *middleware.TenantResolver,
+	gdb *gorm.DB,
+) *gin.Engine {
+	gin.SetMode(cfg.GinMode)
+
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(middleware.RequestLogger())
+
+	// Sem esta configuração o Gin confia no X-Forwarded-For de qualquer origem, o que
+	// permite falsificar o IP do cliente e contornar o rate limiting.
+	if len(cfg.TrustedProxies) > 0 {
+		if err := r.SetTrustedProxies(cfg.TrustedProxies); err != nil {
+			slog.Error("TRUSTED_PROXIES inválido", "erro", err)
+		}
+	} else {
+		_ = r.SetTrustedProxies(nil)
+	}
+
+	r.Use(middleware.CORS(middleware.CORSConfig{
+		MainDomain:        cfg.MainDomain,
+		PermitirLocalhost: cfg.DevMode(),
+		DB:                gdb,
+	}))
+	r.Use(middleware.SecurityHeaders(cfg.DevMode()))
+	r.Use(middleware.CacheControl())
+
+	// Limites separados por sensibilidade: autenticação é o alvo de força-bruta, o
+	// storefront tem tráfego legítimo muito superior.
+	limiteAuth := middleware.NewRateLimiter(10, 5)
+	limiteRegisto := middleware.NewRateLimiter(5, 3)
+	limitePublico := middleware.NewRateLimiter(300, 60)
+	limiteEncomenda := middleware.NewRateLimiter(20, 10)
+	limiteDNS := middleware.NewRateLimiter(10, 5)
+
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
-
-	// Servir Arquivos Estáticos
-	r.Static("/static", "./static")
-	// Rota Raiz (Landing Page no Domínio Principal, Redirecionamento para /menu nos subdomínios)
-	r.GET("/", func(c *gin.Context) {
-		hostDomain := strings.Split(c.Request.Host, ":")[0]
-		mainDomain := os.Getenv("MAIN_DOMAIN")
-		if mainDomain == "" {
-			mainDomain = "deliverysistema.com.br"
-		}
-
-		isRootDomain := hostDomain == mainDomain || 
-			hostDomain == "www."+mainDomain || 
-			hostDomain == "localhost" || 
-			hostDomain == "127.0.0.1"
-
-		if !isRootDomain {
-			// Se for subdomínio ou domínio próprio do restaurante, vai direto pro cardápio
-			c.Redirect(http.StatusMovedPermanently, "/menu")
+	r.GET("/ready", func(c *gin.Context) {
+		if err := gdb.Exec("SELECT 1").Error; err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "base de dados indisponível"})
 			return
 		}
-
-		// Se for o domínio raiz do SaaS, serve a landing page oficial
-		c.File("./static/index.html")
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+
+	r.Static("/static", "./static")
 	r.StaticFile("/menu", "./static/menu.html")
 	r.StaticFile("/pedido", "./static/order.html")
 	r.StaticFile("/admin", "./static/admin.html")
+	r.StaticFile("/redefinir-senha", "./static/reset.html")
+	r.StaticFile("/privacidade", "./static/privacidade.html")
 
-	// --- ROTAS DA API ---
+	// Raiz: landing page no domínio do SaaS, storefront nos domínios de clientes.
+	r.GET("/", func(c *gin.Context) {
+		if resolver.IsMainDomain(c.Request.Host) {
+			c.File("./static/index.html")
+			return
+		}
+		c.Redirect(http.StatusFound, "/menu")
+	})
 
-	// Rotas Públicas (Sem necessidade de autenticação)
 	api := r.Group("/api")
 	{
-		// Rotas de Tenant (Autenticação SaaS)
-		api.POST("/tenant/registrar", tenantHandler.Registrar)
-		api.POST("/tenant/login", tenantHandler.Login)
-		api.GET("/tenant/detect", tenantHandler.DetectTenant)
+		autenticacao := api.Group("/tenant")
+		{
+			autenticacao.POST("/registrar", limiteRegisto.Limit(), h.Registar)
+			autenticacao.POST("/login", limiteAuth.LimitBy(chavePorIPeCorpo), h.Login)
+			autenticacao.POST("/refresh", limiteAuth.Limit(), h.Refresh)
+			autenticacao.POST("/logout", h.Logout)
+			autenticacao.POST("/esqueci-senha", limiteRegisto.Limit(), h.EsqueciSenha)
+			autenticacao.POST("/redefinir-senha", limiteRegisto.Limit(), h.RedefinirSenha)
+			autenticacao.GET("/detect", limitePublico.Limit(), h.DetectTenant)
+		}
 
-		// Rastreamento público de pedidos
-		api.GET("/pedidos/:id", orderHandler.GetOrder)
+		// Rastreio público por token opaco.
+		api.GET("/encomendas/:token", limitePublico.Limit(), h.GetOrderPublico)
 
-		// Consultas e Checkout Públicas escopo do cardápio do restaurante (:slug ou por Domínio)
-		api.GET("/:slug/public-menu", menuHandler.GetPublicMenu)
-		api.POST("/:slug/pedidos", orderHandler.CreateOrder)
-		api.GET("/public-menu", menuHandler.GetPublicMenu)
-		api.POST("/pedidos", orderHandler.CreateOrder)
+		// Storefront. O tenant é resolvido pelo Host ou pelo :slug, nunca por token.
+		publico := api.Group("", limitePublico.Limit(), resolver.ResolvePublic())
+		{
+			publico.GET("/public-menu", h.GetPublicMenu)
+			publico.POST("/pedidos", limiteEncomenda.Limit(), h.CreateOrder)
+		}
+		publicoComSlug := api.Group("/:slug", limitePublico.Limit(), resolver.ResolvePublic())
+		{
+			publicoComSlug.GET("/public-menu", h.GetPublicMenu)
+			publicoComSlug.POST("/pedidos", limiteEncomenda.Limit(), h.CreateOrder)
+		}
 	}
 
-	// Rotas Privadas (Lojista - Requer header Authorization: admin_user_<tenant_id>_<user_id>)
-	admin := r.Group("/api/admin")
-	admin.Use(middleware.TenantContext())
+	// Rotas administrativas: o tenant vem exclusivamente das claims do JWT.
+	admin := r.Group("/api/admin", middleware.RequireAuth(h.Tokens))
 	{
-		// Configurações do Restaurante (Nome, Domínio, Pagamento)
-		admin.GET("/config", tenantHandler.GetConfig)
-		admin.PUT("/config", tenantHandler.UpdateConfig)
-		admin.GET("/config/check-dns", tenantHandler.CheckDNS)
+		admin.GET("/config", h.GetConfig)
+		admin.POST("/conta/alterar-senha", h.AlterarSenha)
 
-		// Gestão de Cardápio
-		admin.GET("/cardapio", menuHandler.GetMenu)
-		admin.POST("/cardapio", menuHandler.CreateMenuItem)
-		admin.PUT("/cardapio/:id", menuHandler.UpdateMenuItem)
-		admin.DELETE("/cardapio/:id", menuHandler.DeleteMenuItem)
+		// Configuração do restaurante e domínio: apenas owner e admin.
+		gestao := admin.Group("", middleware.RequireRole(middleware.RoleAdmin))
+		{
+			gestao.PUT("/config", h.UpdateConfig)
+			gestao.POST("/config/dominio", h.SolicitarDominio)
+			gestao.POST("/config/dominio/verificar", h.VerificarDominio)
+			gestao.GET("/config/check-dns", limiteDNS.Limit(), h.CheckDNS)
+		}
 
-		// Gestão de Pedidos do Lojista
-		admin.GET("/pedidos", orderHandler.GetAdminOrders)
-		admin.PUT("/pedidos/:id/status", orderHandler.UpdateOrderStatus)
+		// Cardápio: gerente e acima.
+		cardapio := admin.Group("/cardapio", middleware.RequireRole(middleware.RoleGerente))
+		{
+			cardapio.GET("", h.GetMenu)
+			cardapio.POST("", h.CreateMenuItem)
+			cardapio.PUT("/:id", h.UpdateMenuItem)
+			cardapio.DELETE("/:id", h.DeleteMenuItem)
+		}
 
-		// Gestão de Usuários
-		admin.GET("/usuarios", tenantHandler.ListUsuarios)
-		admin.POST("/usuarios", tenantHandler.CreateUsuario)
-		admin.DELETE("/usuarios/:id", tenantHandler.DeleteUsuario)
+		// Encomendas: qualquer funcionário precisa de operar o balcão.
+		encomendas := admin.Group("/pedidos", middleware.RequireRole(middleware.RoleFuncionario))
+		{
+			encomendas.GET("", h.GetAdminOrders)
+			encomendas.PUT("/:id/status", h.UpdateOrderStatus)
+		}
+
+		// Utilizadores: apenas owner e admin.
+		usuarios := admin.Group("/usuarios", middleware.RequireRole(middleware.RoleAdmin))
+		{
+			usuarios.GET("", h.ListUsuarios)
+			usuarios.POST("", h.CreateUsuario)
+			usuarios.DELETE("/:id", h.DeleteUsuario)
+		}
 	}
 
-	// Porta padrão 8081 para evitar conflito com a 8080 do CRM
-	port := ":" + cfg.Port
-	log.Printf("Servidor de cardápios online iniciado na porta %s...", port)
-	if err := r.Run(port); err != nil {
-		log.Fatalf("Erro ao iniciar o servidor: %v", err)
+	return r
+}
+
+// chavePorIPeCorpo limita o login por IP e por conta em simultâneo, para que a rotação de
+// IPs não permita força-bruta a uma conta específica.
+func chavePorIPeCorpo(c *gin.Context) string {
+	return c.ClientIP() + "|" + c.GetHeader("X-Login-Hint")
+}
+
+// iniciarLimpezaPeriodica remove tokens expirados.
+//
+// Sem isto as tabelas refresh_tokens e password_resets crescem indefinidamente.
+func iniciarLimpezaPeriodica(gdb *gorm.DB) {
+	go func() {
+		t := time.NewTicker(6 * time.Hour)
+		defer t.Stop()
+		for {
+			agora := time.Now()
+			if err := gdb.Where("expires_at < ?", agora.Add(-24*time.Hour)).
+				Delete(&models.RefreshToken{}).Error; err != nil {
+				slog.Error("falha ao limpar refresh tokens expirados", "erro", err)
+			}
+			if err := gdb.Where("expires_at < ?", agora.Add(-24*time.Hour)).
+				Delete(&models.PasswordReset{}).Error; err != nil {
+				slog.Error("falha ao limpar pedidos de reset expirados", "erro", err)
+			}
+			<-t.C
+		}
+	}()
+}
+
+// servirComShutdownGracioso aceita tráfego até receber SIGTERM/SIGINT e depois espera que
+// os pedidos em curso terminem.
+//
+// Sem isto, um deploy corta encomendas a meio da transacção.
+func servirComShutdownGracioso(s *http.Server) error {
+	erros := make(chan error, 1)
+
+	go func() {
+		slog.Info("servidor a escutar", "endereco", s.Addr)
+		if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			erros <- err
+		}
+	}()
+
+	paragem := make(chan os.Signal, 1)
+	signal.Notify(paragem, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case err := <-erros:
+		return err
+	case sig := <-paragem:
+		slog.Info("sinal de paragem recebido; a encerrar", "sinal", sig.String())
 	}
+
+	ctx, cancelar := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancelar()
+
+	if err := s.Shutdown(ctx); err != nil {
+		return err
+	}
+	slog.Info("servidor encerrado")
+	return nil
 }

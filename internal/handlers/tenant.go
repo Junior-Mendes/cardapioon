@@ -1,562 +1,501 @@
 package handlers
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
+	"time"
 
-	"cardapio-online/internal/db"
+	"cardapio-online/internal/auth"
 	"cardapio-online/internal/middleware"
 	"cardapio-online/internal/models"
+	"cardapio-online/internal/validate"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
-type TenantHandler struct{}
+// prefixoTXTVerificacao é o subdomínio onde o cliente coloca o registo TXT de prova.
+const prefixoTXTVerificacao = "_cardapio-verify"
 
-func NewTenantHandler() *TenantHandler {
-	return &TenantHandler{}
-}
-
-func hashPassword(password string) string {
-	hash := sha256.Sum256([]byte(password))
-	return hex.EncodeToString(hash[:])
-}
-
-type RegistrarInput struct {
-	Nome     string `json:"nome" binding:"required"`
-	Slug     string `json:"slug" binding:"required"`
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=6"`
-}
-
-// Registrar cria um novo tenant no SaaS e o respectivo usuário administrador
-func (h *TenantHandler) Registrar(c *gin.Context) {
-	var input RegistrarInput
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Dados inválidos: " + err.Error()})
+// GetConfig devolve as configurações do restaurante autenticado.
+func (h *Handler) GetConfig(c *gin.Context) {
+	var t models.Tenant
+	if err := h.DB.First(&t, middleware.GetTenantID(c)).Error; err != nil {
+		erroCliente(c, http.StatusNotFound, "Restaurante não encontrado")
 		return
 	}
 
-	slug := strings.ToLower(strings.TrimSpace(input.Slug))
-	if slug == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "O slug do restaurante é obrigatório"})
-		return
-	}
-
-	email := strings.ToLower(strings.TrimSpace(input.Email))
-
-	// Valida se o slug já está em uso
-	var slugCount int64
-	db.DB.Model(&models.Tenant{}).Where("slug = ?", slug).Count(&slugCount)
-	if slugCount > 0 {
-		c.JSON(http.StatusConflict, gin.H{"error": "Este slug de URL já está em uso por outro restaurante"})
-		return
-	}
-
-	// Valida se o e-mail já está em uso
-	var emailCount int64
-	db.DB.Model(&models.Usuario{}).Where("email = ?", email).Count(&emailCount)
-	if emailCount > 0 {
-		c.JSON(http.StatusConflict, gin.H{"error": "Este e-mail de usuário já está cadastrado"})
-		return
-	}
-
-	// Transação para garantir criação do tenant e usuário atomicamente
-	tx := db.DB.Begin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
-
-	tenant := models.Tenant{
-		Nome:               input.Nome,
-		Slug:               slug,
-		Ativo:              true,
-		SenhaHash:          hashPassword(input.Password), // mantido para retrocompatibilidade
-		PixAtivo:           false,
-		CartaoCreditoAtivo: false,
-		CartaoDebitoAtivo:  false,
-		DinheiroAtivo:      true,
-	}
-
-	if err := tx.Create(&tenant).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao registrar restaurante: " + err.Error()})
-		return
-	}
-
-	usuario := models.Usuario{
-		TenantID:  tenant.ID,
-		Nome:      "Proprietário " + input.Nome,
-		Email:     email,
-		SenhaHash: hashPassword(input.Password),
-		Role:      "owner",
-		Ativo:     true,
-	}
-
-	if err := tx.Create(&usuario).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao registrar usuário administrador: " + err.Error()})
-		return
-	}
-
-	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao confirmar cadastro: " + err.Error()})
-		return
-	}
-
-	// Gera o arquivo de rotas dinâmicas do Traefik para o novo inquilino
-	SaveTenantTraefikConfig(&tenant)
-
-	c.JSON(http.StatusCreated, gin.H{
-		"message": "Restaurante registrado com sucesso!",
-		"tenant":  tenant,
-		"token":   fmt.Sprintf("admin_user_%d_%d", tenant.ID, usuario.ID),
-		"nome":    usuario.Nome,
-		"email":   usuario.Email,
-		"role":    usuario.Role,
+	c.JSON(http.StatusOK, gin.H{
+		"nome":                 t.Nome,
+		"nif":                  t.NIF,
+		"slug":                 t.Slug,
+		"domain":               t.Domain,
+		"domain_status":        t.DomainStatus,
+		"domain_verified_at":   t.DomainVerifiedAt,
+		"cartao_credito_ativo": t.CartaoCreditoAtivo,
+		"cartao_debito_ativo":  t.CartaoDebitoAtivo,
+		"dinheiro_ativo":       t.DinheiroAtivo,
+		"main_domain":          h.Cfg.MainDomain,
+		"storefront_url":       fmt.Sprintf("https://%s.%s/menu", t.Slug, h.Cfg.MainDomain),
 	})
 }
 
-type LoginInput struct {
-	Identifier string `json:"identifier" binding:"required"` // Aceita email ou slug do tenant
-	Password   string `json:"password" binding:"required"`
+type updateConfigInput struct {
+	Nome               *string `json:"nome"`
+	NIF                *string `json:"nif"`
+	CartaoCreditoAtivo *bool   `json:"cartao_credito_ativo"`
+	CartaoDebitoAtivo  *bool   `json:"cartao_debito_ativo"`
+	DinheiroAtivo      *bool   `json:"dinheiro_ativo"`
 }
 
-// Login autentica o usuário e retorna o token de acesso administrativo correspondente
-func (h *TenantHandler) Login(c *gin.Context) {
-	var input LoginInput
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Dados inválidos: " + err.Error()})
+// UpdateConfig actualiza os dados do restaurante.
+//
+// O domínio personalizado deixou de ser alterável aqui: passou a ter o seu próprio fluxo
+// em dois passos (SolicitarDominio + VerificarDominio), porque aceitá-lo directamente
+// permitia reclamar o domínio de terceiros.
+//
+// Todos os campos são ponteiros para distinguir "não enviado" de "enviado vazio/false":
+// a versão anterior desactivava silenciosamente todos os métodos de pagamento quando o
+// frontend enviava um payload parcial.
+func (h *Handler) UpdateConfig(c *gin.Context) {
+	var t models.Tenant
+	if err := h.DB.First(&t, middleware.GetTenantID(c)).Error; err != nil {
+		erroCliente(c, http.StatusNotFound, "Restaurante não encontrado")
 		return
 	}
 
-	var usuario models.Usuario
-	var tenant models.Tenant
-	var err error
-
-	identifier := strings.ToLower(strings.TrimSpace(input.Identifier))
-
-	if strings.Contains(identifier, "@") {
-		// Busca por E-mail do usuário
-		err = db.DB.Where("email = ? AND ativo = ?", identifier, true).First(&usuario).Error
-		if err == nil {
-			err = db.DB.First(&tenant, usuario.TenantID).Error
-		}
-	} else {
-		// Busca por Slug do restaurante (compatibilidade legada)
-		err = db.DB.Where("slug = ? AND ativo = ?", identifier, true).First(&tenant).Error
-		if err == nil {
-			err = db.DB.Where("tenant_id = ? AND ativo = ?", tenant.ID, true).Order("role = 'owner' desc, id asc").First(&usuario).Error
-		}
+	var in updateConfigInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		erroCliente(c, http.StatusBadRequest, "Dados inválidos")
+		return
 	}
 
+	campos := map[string]any{}
+
+	if in.Nome != nil {
+		nome := limparLinha(*in.Nome, 150)
+		if nome == "" {
+			erroCliente(c, http.StatusBadRequest, "O nome do restaurante não pode ficar vazio")
+			return
+		}
+		campos["nome"] = nome
+	}
+	if in.NIF != nil {
+		nif := strings.TrimSpace(*in.NIF)
+		if nif != "" && !validate.NIFPortugues(nif) {
+			erroCliente(c, http.StatusBadRequest, "NIF inválido")
+			return
+		}
+		campos["nif"] = nif
+	}
+	if in.CartaoCreditoAtivo != nil {
+		campos["cartao_credito_ativo"] = *in.CartaoCreditoAtivo
+	}
+	if in.CartaoDebitoAtivo != nil {
+		campos["cartao_debito_ativo"] = *in.CartaoDebitoAtivo
+	}
+	if in.DinheiroAtivo != nil {
+		campos["dinheiro_ativo"] = *in.DinheiroAtivo
+	}
+
+	if len(campos) == 0 {
+		c.JSON(http.StatusOK, gin.H{"message": "Nada a actualizar"})
+		return
+	}
+
+	if err := h.DB.Model(&t).Updates(campos).Error; err != nil {
+		h.erroInterno(c, "actualizar configuração do tenant", err)
+		return
+	}
+
+	h.auditar(c, "config_actualizada", "tenant", fmt.Sprint(t.ID), chavesDe(campos))
+	c.JSON(http.StatusOK, gin.H{"message": "Configurações guardadas"})
+}
+
+type dominioInput struct {
+	Domain string `json:"domain" binding:"required"`
+}
+
+// SolicitarDominio registra a intenção de usar um domínio próprio e devolve o registo TXT
+// que o cliente tem de criar.
+//
+// A rota no Traefik NÃO é criada nesta fase. Só depois de VerificarDominio confirmar o
+// TXT é que o domínio passa a ser encaminhado e a pedir certificado.
+func (h *Handler) SolicitarDominio(c *gin.Context) {
+	var t models.Tenant
+	if err := h.DB.First(&t, middleware.GetTenantID(c)).Error; err != nil {
+		erroCliente(c, http.StatusNotFound, "Restaurante não encontrado")
+		return
+	}
+
+	var in dominioInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		erroCliente(c, http.StatusBadRequest, "Domínio inválido")
+		return
+	}
+
+	dominio, err := validate.Domain(in.Domain)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Credenciais incorretas ou restaurante inativo"})
+		erroCliente(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if hashPassword(input.Password) != usuario.SenhaHash {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Credenciais incorretas ou restaurante inativo"})
-		return
-	}
-
-	// Gera o token no formato admin_user_<tenant_id>_<user_id>
-	token := fmt.Sprintf("admin_user_%d_%d", tenant.ID, usuario.ID)
-
-	c.JSON(http.StatusOK, gin.H{
-		"token": token,
-		"nome":  usuario.Nome,
-		"email": usuario.Email,
-		"role":  usuario.Role,
-		"slug":  tenant.Slug,
-	})
-}
-
-// GetConfig retorna as configurações do tenant autenticado
-func (h *TenantHandler) GetConfig(c *gin.Context) {
-	tenantID := middleware.GetTenantID(c)
-	var tenant models.Tenant
-	if err := db.DB.First(&tenant, tenantID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Restaurante não localizado"})
-		return
-	}
-
-	mainDomain := os.Getenv("MAIN_DOMAIN")
-	if mainDomain == "" {
-		mainDomain = "deliverysistema.com.br"
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"nome":                 tenant.Nome,
-		"slug":                 tenant.Slug,
-		"domain":               tenant.Domain,
-		"pix_ativo":            tenant.PixAtivo,
-		"pix_chave":            tenant.PixChave,
-		"cartao_credito_ativo": tenant.CartaoCreditoAtivo,
-		"cartao_debito_ativo":  tenant.CartaoDebitoAtivo,
-		"dinheiro_ativo":      tenant.DinheiroAtivo,
-		"main_domain":          mainDomain,
-	})
-}
-
-type UpdateConfigInput struct {
-	Nome               string  `json:"nome"`
-	Domain             *string `json:"domain"`
-	PixAtivo           bool    `json:"pix_ativo"`
-	PixChave           string  `json:"pix_chave"`
-	CartaoCreditoAtivo bool    `json:"cartao_credito_ativo"`
-	CartaoDebitoAtivo  bool    `json:"cartao_debito_ativo"`
-	DinheiroAtivo      bool    `json:"dinheiro_ativo"`
-}
-
-// UpdateConfig atualiza as configurações do tenant
-func (h *TenantHandler) UpdateConfig(c *gin.Context) {
-	tenantID := middleware.GetTenantID(c)
-	var tenant models.Tenant
-	if err := db.DB.First(&tenant, tenantID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Restaurante não localizado"})
-		return
-	}
-
-	var input UpdateConfigInput
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Dados inválidos: " + err.Error()})
-		return
-	}
-
-	// Atualiza os dados
-	if input.Nome != "" {
-		tenant.Nome = input.Nome
-	}
-
-	// Trata o domínio personalizado
-	if input.Domain != nil {
-		domainTrim := strings.ToLower(strings.TrimSpace(*input.Domain))
-		if domainTrim == "" {
-			tenant.Domain = nil
-		} else {
-			// Verifica se já não há outro tenant usando o mesmo domínio
-			var count int64
-			db.DB.Model(&models.Tenant{}).Where("domain = ? AND id != ?", domainTrim, tenant.ID).Count(&count)
-			if count > 0 {
-				c.JSON(http.StatusConflict, gin.H{"error": "Este domínio personalizado já está configurado por outro restaurante"})
-				return
-			}
-			tenant.Domain = &domainTrim
+	// String vazia remove o domínio configurado.
+	if dominio == "" {
+		if err := h.DB.Model(&t).Updates(map[string]any{
+			"domain":              nil,
+			"domain_status":       models.DomainNenhum,
+			"domain_verify_token": "",
+			"domain_verified_at":  nil,
+		}).Error; err != nil {
+			h.erroInterno(c, "remover domínio personalizado", err)
+			return
 		}
-	}
-
-	tenant.PixAtivo = input.PixAtivo
-	tenant.PixChave = input.PixChave
-	tenant.CartaoCreditoAtivo = input.CartaoCreditoAtivo
-	tenant.CartaoDebitoAtivo = input.CartaoDebitoAtivo
-	tenant.DinheiroAtivo = input.DinheiroAtivo
-
-	if err := db.DB.Save(&tenant).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao atualizar configurações: " + err.Error()})
+		t.Domain = nil
+		t.DomainStatus = models.DomainNenhum
+		h.sincronizarRotaTenant(&t)
+		h.auditar(c, "dominio_removido", "tenant", fmt.Sprint(t.ID), "")
+		c.JSON(http.StatusOK, gin.H{"message": "Domínio personalizado removido", "domain_status": models.DomainNenhum})
 		return
 	}
 
-	// Atualiza o arquivo de rotas dinâmicas do Traefik com o novo domínio
-	SaveTenantTraefikConfig(&tenant)
-
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Configurações salvas com sucesso!",
-		"config":  input,
-	})
-}
-
-// DetectTenant identifica o restaurante pelo domínio Host (incluindo subdomínios wildcard)
-func (h *TenantHandler) DetectTenant(c *gin.Context) {
-	hostDomain := strings.Split(c.Request.Host, ":")[0]
-	mainDomain := os.Getenv("MAIN_DOMAIN")
-	if mainDomain == "" {
-		mainDomain = "deliverysistema.com.br"
-	}
-
-	var tenant models.Tenant
-	var resolved bool
-
-	if hostDomain != "" && hostDomain != "localhost" && hostDomain != "127.0.0.1" {
-		// 1. Verifica se é um subdomínio do domínio principal (ex: testejr.topautomacaojr.top)
-		if hostDomain != mainDomain && strings.HasSuffix(hostDomain, "."+mainDomain) {
-			subdomain := strings.TrimSuffix(hostDomain, "."+mainDomain)
-			parts := strings.Split(subdomain, ".")
-			slug := parts[len(parts)-1]
-			if err := db.DB.Where("slug = ? AND ativo = ?", slug, true).First(&tenant).Error; err == nil {
-				resolved = true
-			}
-		} else {
-			// 2. Busca por domínio próprio (ex: www.pizzariadojoao.com.br)
-			if err := db.DB.Where("domain = ? AND ativo = ?", hostDomain, true).First(&tenant).Error; err == nil {
-				resolved = true
-			}
-		}
-	}
-
-	if !resolved {
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "main_domain",
-			"message": "Nenhum restaurante resolvido para este domínio",
-		})
+	if err := validate.DomainNaoPodeSerDoSaaS(dominio, h.Cfg.MainDomain); err != nil {
+		erroCliente(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"status": "resolved",
-		"tenant": gin.H{
-			"id":     tenant.ID,
-			"nome":   tenant.Nome,
-			"slug":   tenant.Slug,
-			"domain": tenant.Domain,
+	// Um domínio já verificado por outro tenant não pode ser reclamado.
+	var conflitos int64
+	if err := h.DB.Model(&models.Tenant{}).
+		Where("domain = ? AND id <> ?", dominio, t.ID).
+		Count(&conflitos).Error; err != nil {
+		h.erroInterno(c, "verificar conflito de domínio", err)
+		return
+	}
+	if conflitos > 0 {
+		erroCliente(c, http.StatusConflict, "Este domínio já está associado a outro restaurante")
+		return
+	}
+
+	token := auth.NewOpaqueToken(24)
+	if err := h.DB.Model(&t).Updates(map[string]any{
+		"domain":              dominio,
+		"domain_status":       models.DomainPendente,
+		"domain_verify_token": token,
+		"domain_verified_at":  nil,
+	}).Error; err != nil {
+		h.erroInterno(c, "gravar domínio pendente", err)
+		return
+	}
+
+	// Se havia um domínio verificado antes, a rota é reescrita sem ele: o encaminhamento
+	// pára até a nova verificação passar.
+	t.Domain = &dominio
+	t.DomainStatus = models.DomainPendente
+	h.sincronizarRotaTenant(&t)
+
+	h.auditar(c, "dominio_solicitado", "tenant", fmt.Sprint(t.ID), dominio)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message":       "Domínio registado. Crie o registo TXT indicado e depois clique em verificar.",
+		"domain":        dominio,
+		"domain_status": models.DomainPendente,
+		"registo_txt": gin.H{
+			"tipo":  "TXT",
+			"nome":  fmt.Sprintf("%s.%s", prefixoTXTVerificacao, dominio),
+			"valor": token,
+		},
+		"registo_encaminhamento": gin.H{
+			"tipo":  "CNAME",
+			"nome":  dominio,
+			"valor": h.Cfg.MainDomain,
+			"nota":  "Se o seu registrador não permitir CNAME na raiz do domínio, use um registo A para o IP do servidor.",
 		},
 	})
 }
 
-// ListUsuarios lista todos os usuários vinculados ao tenant
-func (h *TenantHandler) ListUsuarios(c *gin.Context) {
-	tenantID := middleware.GetTenantID(c)
+// VerificarDominio confirma o registo TXT e activa o encaminhamento.
+func (h *Handler) VerificarDominio(c *gin.Context) {
+	var t models.Tenant
+	if err := h.DB.First(&t, middleware.GetTenantID(c)).Error; err != nil {
+		erroCliente(c, http.StatusNotFound, "Restaurante não encontrado")
+		return
+	}
+
+	dominio := t.DomainValue()
+	if dominio == "" || t.DomainVerifyToken == "" {
+		erroCliente(c, http.StatusBadRequest, "Não há domínio pendente de verificação")
+		return
+	}
+
+	ctx, cancelar := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	defer cancelar()
+
+	nome := fmt.Sprintf("%s.%s", prefixoTXTVerificacao, dominio)
+	registos, err := net.DefaultResolver.LookupTXT(ctx, nome)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"verificado": false,
+			"motivo": fmt.Sprintf(
+				"Não foi possível ler o registo TXT em %s. A propagação de DNS pode levar até algumas horas.", nome),
+			"registo_txt": gin.H{"tipo": "TXT", "nome": nome, "valor": t.DomainVerifyToken},
+		})
+		return
+	}
+
+	encontrado := false
+	for _, r := range registos {
+		if strings.TrimSpace(r) == t.DomainVerifyToken {
+			encontrado = true
+			break
+		}
+	}
+	if !encontrado {
+		c.JSON(http.StatusOK, gin.H{
+			"verificado":  false,
+			"motivo":      "O registo TXT existe mas o valor não corresponde. Confirme que copiou o token completo.",
+			"registo_txt": gin.H{"tipo": "TXT", "nome": nome, "valor": t.DomainVerifyToken},
+		})
+		return
+	}
+
+	agora := time.Now()
+	if err := h.DB.Model(&t).Updates(map[string]any{
+		"domain_status":      models.DomainVerificado,
+		"domain_verified_at": agora,
+	}).Error; err != nil {
+		h.erroInterno(c, "gravar domínio verificado", err)
+		return
+	}
+
+	t.DomainStatus = models.DomainVerificado
+	t.DomainVerifiedAt = &agora
+	// Só agora a rota do Traefik inclui o domínio do cliente.
+	h.sincronizarRotaTenant(&t)
+
+	h.auditar(c, "dominio_verificado", "tenant", fmt.Sprint(t.ID), dominio)
+
+	c.JSON(http.StatusOK, gin.H{
+		"verificado":    true,
+		"message":       "Domínio verificado. O certificado SSL é emitido no primeiro acesso.",
+		"domain":        dominio,
+		"domain_status": models.DomainVerificado,
+	})
+}
+
+// CheckDNS informa se o domínio já aponta para a plataforma.
+//
+// É apenas um auxiliar de diagnóstico para o painel; não concede qualquer permissão.
+func (h *Handler) CheckDNS(c *gin.Context) {
+	dominio, err := validate.Domain(c.Query("domain"))
+	if err != nil || dominio == "" {
+		erroCliente(c, http.StatusBadRequest, "Domínio inválido")
+		return
+	}
+
+	ctx, cancelar := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	defer cancelar()
+
+	aponta := false
+	if ips, err := net.DefaultResolver.LookupIPAddr(ctx, dominio); err == nil {
+		if principais, err := net.DefaultResolver.LookupIPAddr(ctx, h.Cfg.MainDomain); err == nil {
+			for _, ip := range ips {
+				for _, p := range principais {
+					if ip.IP.Equal(p.IP) {
+						aponta = true
+					}
+				}
+			}
+		}
+	}
+	if !aponta {
+		if cname, err := net.DefaultResolver.LookupCNAME(ctx, dominio); err == nil {
+			cname = strings.TrimSuffix(strings.ToLower(cname), ".")
+			aponta = cname == h.Cfg.MainDomain || strings.HasSuffix(cname, "."+h.Cfg.MainDomain)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"domain":      dominio,
+		"configured":  aponta,
+		"main_domain": h.Cfg.MainDomain,
+	})
+}
+
+// DetectTenant informa o storefront qual o restaurante do domínio actual.
+func (h *Handler) DetectTenant(c *gin.Context) {
+	t, err := h.Resolver.Lookup(c)
+	if err != nil || t == nil {
+		c.JSON(http.StatusOK, gin.H{"status": "main_domain"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status": "resolved",
+		"tenant": gin.H{"nome": t.Nome, "slug": t.Slug, "domain": t.Domain},
+	})
+}
+
+// --- Gestão de utilizadores ---
+
+// ListUsuarios lista os utilizadores do tenant.
+func (h *Handler) ListUsuarios(c *gin.Context) {
 	var usuarios []models.Usuario
-	if err := db.DB.Where("tenant_id = ?", tenantID).Order("id asc").Find(&usuarios).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao buscar usuários: " + err.Error()})
+	if err := h.DB.Scopes(middleware.TenantScope(c)).Order("id asc").Find(&usuarios).Error; err != nil {
+		h.erroInterno(c, "listar utilizadores", err)
 		return
 	}
 	c.JSON(http.StatusOK, usuarios)
 }
 
-type CreateUsuarioInput struct {
-	Nome     string `json:"nome" binding:"required"`
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=6"`
+type criarUsuarioInput struct {
+	Nome     string `json:"nome" binding:"required,min=2,max=150"`
+	Email    string `json:"email" binding:"required,email,max=150"`
+	Password string `json:"password" binding:"required"`
 	Role     string `json:"role" binding:"required"`
 }
 
-// CreateUsuario cria um novo usuário no escopo do tenant atual
-func (h *TenantHandler) CreateUsuario(c *gin.Context) {
-	tenantID := middleware.GetTenantID(c)
-	var input CreateUsuarioInput
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Dados inválidos: " + err.Error()})
+// CreateUsuario cria um utilizador dentro do tenant.
+func (h *Handler) CreateUsuario(c *gin.Context) {
+	var in criarUsuarioInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		erroCliente(c, http.StatusBadRequest, "Dados inválidos")
 		return
 	}
 
-	email := strings.ToLower(strings.TrimSpace(input.Email))
-	var count int64
-	db.DB.Model(&models.Usuario{}).Where("email = ?", email).Count(&count)
-	if count > 0 {
-		c.JSON(http.StatusConflict, gin.H{"error": "Este e-mail já está em uso por outro usuário"})
+	if !models.RolesValidos[in.Role] {
+		erroCliente(c, http.StatusBadRequest, "Perfil de utilizador inválido")
+		return
+	}
+	// Só um owner pode criar outro owner: caso contrário um admin poderia escalar
+	// privilégios criando uma conta owner para si.
+	if in.Role == models.RoleOwner && middleware.GetRole(c) != models.RoleOwner {
+		erroCliente(c, http.StatusForbidden, "Apenas o proprietário pode criar outro proprietário")
+		return
+	}
+	if err := auth.ValidarForcaSenha(in.Password); err != nil {
+		erroCliente(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
+	email := strings.ToLower(strings.TrimSpace(in.Email))
+	hash, err := auth.HashPassword(in.Password)
+	if err != nil {
+		h.erroInterno(c, "gerar hash de senha", err)
+		return
+	}
+
+	agora := time.Now()
 	usuario := models.Usuario{
-		TenantID:  tenantID,
-		Nome:      input.Nome,
-		Email:     email,
-		SenhaHash: hashPassword(input.Password),
-		Role:      input.Role,
-		Ativo:     true,
+		TenantID:          middleware.GetTenantID(c),
+		Nome:              limparLinha(in.Nome, 150),
+		Email:             email,
+		SenhaHash:         hash,
+		PasswordChangedAt: &agora,
+		Role:              in.Role,
+		Ativo:             true,
 	}
 
-	if err := db.DB.Create(&usuario).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao cadastrar usuário: " + err.Error()})
+	if err := h.DB.Create(&usuario).Error; err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			erroCliente(c, http.StatusConflict, "Este email já está em uso")
+			return
+		}
+		h.erroInterno(c, "criar utilizador", err)
 		return
 	}
 
+	h.auditar(c, "usuario_criado", "usuario", fmt.Sprint(usuario.ID), in.Role)
 	c.JSON(http.StatusCreated, usuario)
 }
 
-// DeleteUsuario exclui um usuário (exceto a si próprio ou o proprietário principal)
-func (h *TenantHandler) DeleteUsuario(c *gin.Context) {
-	tenantID := middleware.GetTenantID(c)
-	var currentUserID uint
-
-	userIDVal, exists := c.Get("user_id")
-	if exists {
-		if val, ok := userIDVal.(uint); ok {
-			currentUserID = val
-		}
-	}
-
-	targetUserIDStr := c.Param("id")
-	targetUserID, err := strconv.ParseUint(targetUserIDStr, 10, 32)
+// DeleteUsuario remove um utilizador do tenant.
+func (h *Handler) DeleteUsuario(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ID de usuário inválido"})
+		erroCliente(c, http.StatusBadRequest, "Identificador inválido")
 		return
 	}
 
-	if uint(targetUserID) == currentUserID {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Não é permitido excluir o próprio usuário conectado"})
+	if uint(id) == middleware.GetUserID(c) {
+		erroCliente(c, http.StatusBadRequest, "Não pode remover a sua própria conta")
 		return
 	}
 
+	// O escopo de tenant é aplicado na leitura: sem isto, um lojista poderia apagar
+	// utilizadores de outro restaurante indicando o ID deles.
 	var usuario models.Usuario
-	if err := db.DB.Where("id = ? AND tenant_id = ?", targetUserID, tenantID).First(&usuario).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Usuário não encontrado"})
+	if err := h.DB.Scopes(middleware.TenantScope(c)).Where("id = ?", id).First(&usuario).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			erroCliente(c, http.StatusNotFound, "Utilizador não encontrado")
+			return
+		}
+		h.erroInterno(c, "procurar utilizador", err)
 		return
 	}
 
-	if usuario.Role == "owner" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "O usuário proprietário original ('owner') não pode ser excluído"})
-		return
-	}
-
-	if err := db.DB.Delete(&usuario).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao remover usuário: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Usuário removido com sucesso!"})
-}
-
-// CheckDNS valida o apontamento CNAME ou A do domínio informado
-func (h *TenantHandler) CheckDNS(c *gin.Context) {
-	domain := c.Query("domain")
-	domain = strings.ToLower(strings.TrimSpace(domain))
-	if domain == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "O domínio é obrigatório"})
-		return
-	}
-
-	mainDomain := os.Getenv("MAIN_DOMAIN")
-	if mainDomain == "" {
-		mainDomain = "deliverysistema.com.br"
-	}
-
-	success := false
-	// 1. Tenta resolver o IP do domínio informado
-	ips, err := net.LookupIP(domain)
-	if err == nil {
-		// Resolve o IP do domínio principal
-		mainIPs, errMain := net.LookupIP(mainDomain)
-		if errMain == nil {
-			for _, ip := range ips {
-				for _, mIP := range mainIPs {
-					if ip.Equal(mIP) {
-						success = true
-						break
-					}
-				}
-				if success {
-					break
-				}
-			}
+	if usuario.Role == models.RoleOwner {
+		var owners int64
+		if err := h.DB.Model(&models.Usuario{}).
+			Where("tenant_id = ? AND role = ? AND ativo = ?", usuario.TenantID, models.RoleOwner, true).
+			Count(&owners).Error; err != nil {
+			h.erroInterno(c, "contar proprietários", err)
+			return
+		}
+		// Permitir remover um owner desde que sobre pelo menos um: bloquear sempre, como
+		// antes, deixava contas com um owner inacessível para sempre.
+		if owners <= 1 {
+			erroCliente(c, http.StatusBadRequest,
+				"Não é possível remover o único proprietário da conta")
+			return
 		}
 	}
 
-	// 2. Se IP não bater, tenta verificar se CNAME aponta para o domínio principal
-	if !success {
-		cname, errCname := net.LookupCNAME(domain)
-		if errCname == nil {
-			cname = strings.TrimSuffix(strings.ToLower(cname), ".")
-			if strings.Contains(cname, mainDomain) {
-				success = true
-			}
-		}
+	if err := h.DB.Delete(&usuario).Error; err != nil {
+		h.erroInterno(c, "remover utilizador", err)
+		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"domain":      domain,
-		"configured":  success,
-		"main_domain": mainDomain,
-	})
+	h.auditar(c, "usuario_removido", "usuario", fmt.Sprint(usuario.ID), usuario.Email)
+	c.JSON(http.StatusOK, gin.H{"message": "Utilizador removido"})
 }
 
-// SaveTenantTraefikConfig grava a rota dinâmica do Traefik para o tenant
-func SaveTenantTraefikConfig(tenant *models.Tenant) {
-	dirPath := "/traefik_dynamic"
-	mainDomain := os.Getenv("MAIN_DOMAIN")
-	if mainDomain == "" {
-		mainDomain = "deliverysistema.com.br"
+// SincronizarRotasTraefik regenera todos os ficheiros de rota a partir da base de dados e
+// remove os que já não correspondam a um tenant activo. Corre no arranque.
+func (h *Handler) SincronizarRotasTraefik() error {
+	if err := h.Traefik.WriteDefault(); err != nil {
+		return fmt.Errorf("gravar rota do domínio principal: %w", err)
 	}
 
-	rule := fmt.Sprintf("Host(`%s.%s`) || Host(`www.%s.%s`)", tenant.Slug, mainDomain, tenant.Slug, mainDomain)
-	if tenant.Domain != nil && *tenant.Domain != "" {
-		rule += fmt.Sprintf(" || Host(`%s`)", *tenant.Domain)
-	}
-
-	config := fmt.Sprintf(`http:
-  routers:
-    router-%[1]s:
-      rule: "%[2]s"
-      entryPoints:
-        - websecure
-      tls:
-        certResolver: myresolver
-      service: service-%[1]s
-
-  services:
-    service-%[1]s:
-      loadBalancer:
-        servers:
-          - url: "http://cardapio_online_api:8081"
-`, tenant.Slug, rule)
-
-	filePath := fmt.Sprintf("%s/%s.yml", dirPath, tenant.Slug)
-	if err := os.WriteFile(filePath, []byte(config), 0644); err != nil {
-		fmt.Printf("Erro ao gravar arquivo de configuração do Traefik para tenant %s: %v\n", tenant.Slug, err)
-	}
-}
-
-// DeleteTenantTraefikConfig remove a rota dinâmica do Traefik do tenant
-func DeleteTenantTraefikConfig(slug string) {
-	dirPath := "/traefik_dynamic"
-	filePath := fmt.Sprintf("%s/%s.yml", dirPath, slug)
-	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
-		fmt.Printf("Erro ao remover arquivo de configuração do Traefik para tenant %s: %v\n", slug, err)
-	}
-}
-
-// SyncTraefikConfigs gera os arquivos dinâmicos do Traefik com base no BD ativo
-func SyncTraefikConfigs() {
 	var tenants []models.Tenant
-	if err := db.DB.Where("ativo = ?", true).Find(&tenants).Error; err != nil {
-		fmt.Printf("Erro ao buscar inquilinos para sincronização do Traefik: %v\n", err)
-		return
+	if err := h.DB.Where("ativo = ?", true).Find(&tenants).Error; err != nil {
+		return fmt.Errorf("carregar tenants activos: %w", err)
 	}
 
-	dirPath := "/traefik_dynamic"
-	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
-		os.MkdirAll(dirPath, 0755)
+	slugs := make([]string, 0, len(tenants))
+	for i := range tenants {
+		h.sincronizarRotaTenant(&tenants[i])
+		slugs = append(slugs, tenants[i].Slug)
 	}
 
-	mainDomain := os.Getenv("MAIN_DOMAIN")
-	if mainDomain == "" {
-		mainDomain = "deliverysistema.com.br"
+	if err := h.Traefik.Prune(slugs); err != nil {
+		// Uma rota órfã que não se consegue remover não deve impedir o arranque.
+		slog.Error("falha ao remover rotas órfãs do Traefik", "erro", err)
 	}
 
-	// 1. Escreve a rota default para o domínio principal
-	defaultConfig := fmt.Sprintf(`http:
-  routers:
-    router-main:
-      rule: "Host(` + "`" + `%[1]s` + "`" + `) || Host(` + "`" + `www.%[1]s` + "`" + `)"
-      entryPoints:
-        - websecure
-      tls:
-        certResolver: myresolver
-      service: service-main
+	slog.Info("rotas do Traefik sincronizadas", "tenants", len(slugs))
+	return nil
+}
 
-  services:
-    service-main:
-      loadBalancer:
-        servers:
-          - url: "http://cardapio_online_api:8081"
-`, mainDomain)
-
-	defaultFilePath := fmt.Sprintf("%s/default.yml", dirPath)
-	if err := os.WriteFile(defaultFilePath, []byte(defaultConfig), 0644); err != nil {
-		fmt.Printf("Erro ao escrever default.yml do Traefik: %v\n", err)
+func chavesDe(m map[string]any) string {
+	chaves := make([]string, 0, len(m))
+	for k := range m {
+		chaves = append(chaves, k)
 	}
-
-	// 2. Escreve as configurações dinâmicas dos inquilinos
-	for _, tenant := range tenants {
-		SaveTenantTraefikConfig(&tenant)
-	}
+	return strings.Join(chaves, ",")
 }

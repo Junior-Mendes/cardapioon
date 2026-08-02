@@ -1,314 +1,378 @@
-// Lógica do Painel Administrativo do Restaurante (Lojista)
+// Painel administrativo do restaurante.
+//
+// Depende de common.js (esc, api, Sessao, formatCurrency, showToast), que tem de ser
+// carregado antes deste ficheiro.
+//
+// Alterações relevantes em relação à versão anterior:
+//   - Autenticação por JWT com renovação automática, em vez do token de formato
+//     "admin_user_<tenant>_<user>", que qualquer pessoa podia escrever.
+//   - Todo o dado vindo do servidor é escapado com esc() antes de entrar em innerHTML.
+//     Sem isso, um produto chamado "<img onerror=...>" executava no painel do lojista.
+//   - Handlers ligados por addEventListener em vez de onclick inline, porque a CSP não
+//     permite 'unsafe-inline' em script-src.
+//   - Pix removido (não existe em Portugal); pagamentos passam a dinheiro, multibanco na
+//     entrega e cartão online.
+//   - Domínio personalizado passa a exigir verificação de propriedade por registo TXT.
 
-let adminToken = localStorage.getItem('admin_token');
+'use strict';
+
 let currentTab = 'pedidos';
 let menuItems = [];
 let orders = [];
+let users = [];
 let editingItemId = null;
-
-function formatCurrency(val) {
-  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
-}
-
-// Utilitário para mostrar Toasts
-function showToast(message, type = 'info') {
-  const container = document.getElementById('toast-container');
-  const toast = document.createElement('div');
-  toast.className = `toast toast-${type} glass`;
-  toast.innerHTML = `<span>${message}</span>`;
-  container.appendChild(toast);
-  
-  setTimeout(() => toast.classList.add('show'), 50);
-  
-  setTimeout(() => {
-    toast.classList.remove('show');
-    setTimeout(() => toast.remove(), 300);
-  }, 3500);
-}
+let timerPedidos = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   checkAuth();
   setupEventListeners();
 });
 
-// Verifica se está logado; se não estiver, abre overlay de login
+// --- Sessão ---
+
 function checkAuth() {
-  adminToken = localStorage.getItem('admin_token');
-  if (!adminToken) {
-    document.getElementById('login-overlay').classList.add('open');
-  } else {
-    document.getElementById('login-overlay').classList.remove('open');
-    document.getElementById('logged-user-name').innerText = localStorage.getItem('admin_name') || 'Lojista';
-    loadDashboardData();
-    // Inicia Polling de Pedidos a cada 10 segundos
-    setInterval(loadOrders, 10000);
+  const overlay = document.getElementById('login-overlay');
+
+  if (!Sessao.temSessao()) {
+    overlay.classList.add('open');
+    if (timerPedidos) {
+      clearInterval(timerPedidos);
+      timerPedidos = null;
+    }
+    return;
+  }
+
+  overlay.classList.remove('open');
+  document.getElementById('logged-user-name').innerText = Sessao.info().nome || 'Lojista';
+
+  loadDashboardData();
+
+  // Actualização periódica das encomendas.
+  //
+  // Continua a ser polling, mas agora sobre uma lista paginada em vez de todas as
+  // encomendas de sempre. A substituição por SSE está planeada para a Fase 2.
+  if (!timerPedidos) {
+    timerPedidos = setInterval(loadOrders, 15000);
   }
 }
 
-// Lógica de Login
 async function handleLogin(e) {
   e.preventDefault();
   const identifier = document.getElementById('login-slug').value.trim();
-  const pass = document.getElementById('login-password').value.trim();
+  const password = document.getElementById('login-password').value;
 
   try {
-    const res = await fetch('/api/tenant/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier, password: pass })
+    const dados = await api('/api/tenant/login', {
+      metodo: 'POST',
+      corpo: { identifier, password },
+      autenticado: false,
     });
 
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Credenciais inválidas.');
-
-    localStorage.setItem('admin_token', data.token);
-    localStorage.setItem('admin_name', data.nome);
-    localStorage.setItem('admin_slug', data.slug);
-    
-    showToast(`Bem-vindo, ${data.nome}!`, 'success');
+    Sessao.guardar(dados);
+    showToast(`Bem-vindo, ${dados.usuario.nome}!`, 'success');
     checkAuth();
   } catch (err) {
     showToast(err.message, 'error');
   }
 }
 
-function handleLogout() {
-  localStorage.removeItem('admin_token');
-  localStorage.removeItem('admin_name');
-  localStorage.removeItem('admin_slug');
+async function handleLogout() {
+  const refresh = Sessao.refreshToken();
+  if (refresh) {
+    // Revoga o refresh token no servidor; se falhar, a sessão local é limpa de qualquer forma.
+    try {
+      await api('/api/tenant/logout', {
+        metodo: 'POST',
+        corpo: { refresh_token: refresh },
+        autenticado: false,
+      });
+    } catch {
+      /* ignorado de propósito */
+    }
+  }
+  Sessao.limpar();
   window.location.reload();
 }
 
-// Carrega os dados da tela ativa
+async function handleEsqueciSenha() {
+  const email = prompt('Indique o email da sua conta:');
+  if (!email) return;
+
+  try {
+    const dados = await api('/api/tenant/esqueci-senha', {
+      metodo: 'POST',
+      corpo: { email: email.trim() },
+      autenticado: false,
+    });
+    showToast(dados.message, 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+// --- Navegação ---
+
 function loadDashboardData() {
   loadOrders();
   loadMenu();
   loadPaymentsConfig();
-  loadGeneralConfig();
 }
 
-// Tab switcher
 function switchTab(tab) {
   currentTab = tab;
-  document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
-  document.getElementById(`nav-${tab}`).classList.add('active');
 
-  document.getElementById('tab-pedidos').style.display = tab === 'pedidos' ? 'block' : 'none';
-  document.getElementById('tab-cardapio').style.display = tab === 'cardapio' ? 'block' : 'none';
-  document.getElementById('tab-pagamentos').style.display = tab === 'pagamentos' ? 'block' : 'none';
-  document.getElementById('tab-usuarios').style.display = tab === 'usuarios' ? 'block' : 'none';
-  document.getElementById('tab-configuracoes').style.display = tab === 'configuracoes' ? 'block' : 'none';
+  ['pedidos', 'cardapio', 'pagamentos', 'usuarios', 'configuracoes'].forEach((nome) => {
+    const painel = document.getElementById(`tab-${nome}`);
+    if (painel) painel.style.display = tab === nome ? 'block' : 'none';
 
-  if (tab === 'usuarios') {
-    loadUsers();
-  } else if (tab === 'configuracoes') {
-    loadGeneralConfig();
-  }
+    const nav = document.getElementById(`nav-${nome}`);
+    if (nav) nav.classList.toggle('active', tab === nome);
+  });
+
+  if (tab === 'usuarios') loadUsers();
+  else if (tab === 'configuracoes') loadGeneralConfig();
 }
 
-// --- GESTÃO DE PEDIDOS ---
+// --- Encomendas ---
+
 async function loadOrders() {
-  if (!adminToken) return;
+  if (!Sessao.temSessao()) return;
+
   try {
-    const res = await fetch('/api/admin/pedidos', {
-      headers: { 'Authorization': adminToken }
-    });
-    if (!res.ok) throw new Error();
-    
-    orders = await res.json();
+    // A resposta é paginada: { encomendas: [...], paginacao: {...} }
+    const dados = await api('/api/admin/pedidos?por_pagina=100');
+    orders = dados.encomendas || [];
     renderOrdersBoard();
     renderMetrics();
   } catch (err) {
-    showToast('Falha ao sincronizar pedidos.', 'error');
+    if (err.status === 401) {
+      checkAuth();
+      return;
+    }
+    showToast('Não foi possível sincronizar as encomendas.', 'error');
   }
 }
 
 function renderMetrics() {
-  const totalSales = orders.filter(o => o.status === 'finalizado').reduce((sum, o) => sum + o.valor_total, 0);
-  const activeOrders = orders.filter(o => o.status !== 'finalizado' && o.status !== 'cancelado').length;
-  
-  document.getElementById('metric-sales').innerText = formatCurrency(totalSales);
-  document.getElementById('metric-orders').innerText = activeOrders;
+  const vendas = orders
+    .filter((o) => o.status === 'finalizado')
+    .reduce((soma, o) => soma + Number(o.valor_total || 0), 0);
+  const activas = orders.filter(
+    (o) => o.status !== 'finalizado' && o.status !== 'cancelado'
+  ).length;
+
+  document.getElementById('metric-sales').innerText = formatCurrency(vendas);
+  document.getElementById('metric-orders').innerText = activas;
   document.getElementById('metric-total-orders').innerText = orders.length;
 }
 
+const ETIQUETAS_PAGAMENTO = {
+  dinheiro: 'Dinheiro na entrega',
+  tpa: 'Multibanco na entrega',
+  cartao: 'Cartão online',
+  // Valores históricos, para que encomendas antigas continuem legíveis.
+  retirada_dinheiro: 'Dinheiro (histórico)',
+  retirada_cartao: 'Multibanco (histórico)',
+  cartao_credito: 'Cartão (histórico)',
+  pix: 'Pix (histórico)',
+};
+
 function renderOrdersBoard() {
-  const cols = {
+  const colunas = {
     pendente: document.getElementById('list-pendente'),
     preparando: document.getElementById('list-preparando'),
     pronto: document.getElementById('list-pronto'),
-    finalizado: document.getElementById('list-finalizado')
+    finalizado: document.getElementById('list-finalizado'),
   };
+  Object.values(colunas).forEach((c) => {
+    if (c) c.innerHTML = '';
+  });
 
-  // Limpa colunas
-  Object.values(cols).forEach(c => c.innerHTML = '');
-  
-  // Contadores
-  const counts = { pendente: 0, preparando: 0, pronto: 0, finalizado: 0 };
+  const contagens = { pendente: 0, preparando: 0, pronto: 0, finalizado: 0 };
 
-  orders.forEach(order => {
-    // Agrupa pedidos finalizados/cancelados na coluna de histórico
-    const colName = order.status === 'cancelado' ? 'finalizado' : order.status;
-    const col = cols[colName];
-    if (!col) return;
-    
-    counts[colName]++;
+  orders.forEach((order) => {
+    const nomeColuna = order.status === 'cancelado' ? 'finalizado' : order.status;
+    const coluna = colunas[nomeColuna];
+    if (!coluna) return;
+    contagens[nomeColuna]++;
 
     const card = document.createElement('div');
     card.className = 'order-card glass';
-    if (order.status === 'cancelado') card.style.borderLeftColor = 'var(--danger)';
-    else if (order.status === 'pronto') card.style.borderLeftColor = 'var(--success)';
-    else if (order.status === 'preparando') card.style.borderLeftColor = 'var(--warning)';
-    else card.style.borderLeftColor = 'var(--primary)';
+    card.style.borderLeftColor = corDoEstado(order.status);
 
-    const paymentLabel = order.forma_pagamento.toUpperCase().replace('_', ' ');
-
-    let itemsRows = order.itens.map(i => `
+    const linhasItens = (order.itens || [])
+      .map(
+        (i) => `
       <div class="order-item-row">
-        <span>${i.quantidade}x ${i.nome}</span>
-        <span>${formatCurrency(i.preco_unitario * i.quantidade)}</span>
-      </div>
-    `).join('');
+        <span>${esc(i.quantidade)}x ${esc(i.nome)}</span>
+        <span>${esc(formatCurrency(Number(i.preco_unitario) * Number(i.quantidade)))}</span>
+      </div>`
+      )
+      .join('');
 
-    let actionButtons = '';
-    if (order.status === 'pendente') {
-      actionButtons = `
-        <div class="order-actions">
-          <button class="btn btn-primary order-btn" onclick="updateOrderStatus(${order.id}, 'preparando')">Aceitar e Preparar</button>
-          <button class="btn btn-secondary order-btn" onclick="updateOrderStatus(${order.id}, 'cancelado')" style="color:var(--danger)">Recusar</button>
-        </div>
-      `;
-    } else if (order.status === 'preparando') {
-      actionButtons = `
-        <div class="order-actions">
-          <button class="btn btn-primary order-btn" onclick="updateOrderStatus(${order.id}, 'pronto')" style="background:var(--success)">Pronto para Retirada</button>
-        </div>
-      `;
-    } else if (order.status === 'pronto') {
-      actionButtons = `
-        <div class="order-actions">
-          <button class="btn btn-primary order-btn" onclick="updateOrderStatus(${order.id}, 'finalizado')" style="background:var(--info)">Entregue / Retirado</button>
-        </div>
-      `;
-    }
+    const etiquetaPagamento =
+      ETIQUETAS_PAGAMENTO[order.forma_pagamento] || order.forma_pagamento;
 
-    const cancelBadge = order.status === 'cancelado' 
-      ? `<span style="color:var(--danger); font-weight:700;">[RECUSADO/CANCELADO]</span>` 
-      : '';
+    const badgeCancelado =
+      order.status === 'cancelado'
+        ? '<span style="color:var(--danger); font-weight:700;">[RECUSADA / CANCELADA]</span>'
+        : '';
 
     card.innerHTML = `
       <div class="order-header">
-        <span class="order-id">Pedido ID #${order.id}</span>
-        <span class="order-time">${new Date(order.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+        <span class="order-id">Encomenda #${esc(order.id)}</span>
+        <span class="order-time">${esc(formatTime(order.created_at))}</span>
       </div>
       <div class="order-client">
-        ${order.cliente_nome}
-        <div class="order-phone">${order.cliente_telefone}</div>
+        ${esc(order.cliente_nome)}
+        <div class="order-phone">${esc(order.cliente_telefone)}</div>
       </div>
-      <div class="order-items">
-        ${itemsRows}
-      </div>
+      <div class="order-items">${linhasItens}</div>
       <div class="order-footer">
-        <span class="order-price">${formatCurrency(order.valor_total)}</span>
-        <span class="order-payment">${paymentLabel}</span>
+        <span class="order-price">${esc(formatCurrency(order.valor_total))}</span>
+        <span class="order-payment">${esc(etiquetaPagamento)}</span>
       </div>
-      ${cancelBadge}
-      ${actionButtons}
+      ${badgeCancelado}
+      ${botoesDeAccao(order)}
     `;
 
-    col.appendChild(card);
+    card.querySelectorAll('[data-accao]').forEach((btn) => {
+      btn.addEventListener('click', () =>
+        updateOrderStatus(Number(btn.dataset.pedido), btn.dataset.accao)
+      );
+    });
+
+    coluna.appendChild(card);
   });
 
-  // Atualiza contadores
-  Object.keys(counts).forEach(k => {
-    document.getElementById(`count-${k}`).innerText = counts[k];
+  Object.keys(contagens).forEach((k) => {
+    const el = document.getElementById(`count-${k}`);
+    if (el) el.innerText = contagens[k];
   });
 }
 
-async function updateOrderStatus(orderId, newStatus) {
+function corDoEstado(estado) {
+  switch (estado) {
+    case 'cancelado':
+      return 'var(--danger)';
+    case 'pronto':
+      return 'var(--success)';
+    case 'preparando':
+      return 'var(--warning)';
+    default:
+      return 'var(--primary)';
+  }
+}
+
+function botoesDeAccao(order) {
+  const id = esc(order.id);
+  switch (order.status) {
+    case 'pendente':
+      return `
+        <div class="order-actions">
+          <button class="btn btn-primary order-btn" data-pedido="${id}" data-accao="preparando">Aceitar e preparar</button>
+          <button class="btn btn-secondary order-btn" data-pedido="${id}" data-accao="cancelado" style="color:var(--danger)">Recusar</button>
+        </div>`;
+    case 'preparando':
+      return `
+        <div class="order-actions">
+          <button class="btn btn-primary order-btn" data-pedido="${id}" data-accao="pronto" style="background:var(--success)">Pronta</button>
+        </div>`;
+    case 'pronto':
+      return `
+        <div class="order-actions">
+          <button class="btn btn-primary order-btn" data-pedido="${id}" data-accao="finalizado" style="background:var(--info)">Entregue / levantada</button>
+        </div>`;
+    default:
+      return '';
+  }
+}
+
+async function updateOrderStatus(id, novoEstado) {
   try {
-    const res = await fetch(`/api/admin/pedidos/${orderId}/status`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': adminToken
-      },
-      body: JSON.stringify({ status: newStatus })
+    await api(`/api/admin/pedidos/${id}/status`, {
+      metodo: 'PUT',
+      corpo: { status: novoEstado },
     });
-    if (!res.ok) throw new Error();
-    
-    showToast('Status do pedido atualizado!', 'success');
+    showToast('Estado actualizado.', 'success');
     loadOrders();
   } catch (err) {
-    showToast('Erro ao atualizar status do pedido.', 'error');
+    showToast(err.message, 'error');
   }
 }
 
-// --- GESTÃO DE CARDÁPIO ---
+// --- Menu ---
+
 async function loadMenu() {
-  if (!adminToken) return;
+  if (!Sessao.temSessao()) return;
   try {
-    const res = await fetch('/api/admin/cardapio', {
-      headers: { 'Authorization': adminToken }
-    });
-    if (!res.ok) throw new Error();
-    
-    menuItems = await res.json();
+    menuItems = (await api('/api/admin/cardapio')) || [];
     renderMenuGrid();
   } catch (err) {
-    showToast('Falha ao carregar itens do cardápio.', 'error');
+    if (err.status === 403) return; // funcionário sem permissão para o menu
+    showToast('Não foi possível carregar o menu.', 'error');
   }
 }
+
+const IMAGEM_OMISSAO = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500';
 
 function renderMenuGrid() {
   const container = document.getElementById('menu-items-admin');
+  if (!container) return;
+
   if (menuItems.length === 0) {
-    container.innerHTML = `<div class="cart-empty glass" style="grid-column: 1/-1;"><p>Seu cardápio está vazio. Adicione pratos para começar!</p></div>`;
+    container.innerHTML =
+      '<div class="cart-empty glass" style="grid-column: 1/-1;"><p>O seu menu está vazio. Adicione pratos para começar.</p></div>';
     return;
   }
 
-  container.innerHTML = menuItems.map(item => {
-    const hasDiscount = item.desconto_ativo && item.preco_desconto > 0;
-    const priceDisplay = hasDiscount
-      ? `<span class="price-original slashed">${formatCurrency(item.preco)}</span>
-         <span class="price-discounted">${formatCurrency(item.preco_desconto)}</span>`
-      : `<span class="price-original">${formatCurrency(item.preco)}</span>`;
+  container.innerHTML = menuItems
+    .map((item) => {
+      const temDesconto = item.desconto_ativo && Number(item.preco_desconto) > 0;
+      const precos = temDesconto
+        ? `<span class="price-original slashed">${esc(formatCurrency(item.preco))}</span>
+           <span class="price-discounted">${esc(formatCurrency(item.preco_desconto))}</span>`
+        : `<span class="price-original">${esc(formatCurrency(item.preco))}</span>`;
 
-    const statusBadge = item.disponivel 
-      ? `<div class="menu-item-badge" style="background:var(--success)">ATIVO</div>` 
-      : `<div class="menu-item-badge" style="background:var(--bg-tertiary); color:var(--text-muted)">PAUSADO</div>`;
+      const badge = item.disponivel
+        ? '<div class="menu-item-badge" style="background:var(--success)">ACTIVO</div>'
+        : '<div class="menu-item-badge" style="background:var(--bg-tertiary); color:var(--text-muted)">EM PAUSA</div>';
 
-    const imgUrl = item.imagem_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500';
+      // O URL da imagem entra numa propriedade CSS: escAttr remove parênteses, que de
+      // outro modo fechariam o url(...) e permitiriam injectar mais CSS.
+      const imagem = escAttr(item.imagem_url || IMAGEM_OMISSAO);
 
-    return `
+      return `
       <div class="menu-item-card glass">
-        <div class="menu-item-img" style="background-image: url('${imgUrl}')">
-          ${statusBadge}
-        </div>
+        <div class="menu-item-img" style="background-image: url('${imagem}')">${badge}</div>
         <div class="menu-item-info">
-          <h3 class="menu-item-name">${item.nome}</h3>
-          <p class="menu-item-desc">${item.descricao || ''}</p>
-          <div class="menu-item-price-row">
-            ${priceDisplay}
-          </div>
+          <h3 class="menu-item-name">${esc(item.nome)}</h3>
+          <p class="menu-item-desc">${esc(item.descricao || '')}</p>
+          <div class="menu-item-price-row">${precos}</div>
         </div>
         <div class="menu-item-actions">
-          <button class="btn btn-secondary" style="flex:1; padding:0.5rem;" onclick="openItemModal(${item.id})">Editar</button>
-          <button class="btn btn-outline" style="padding:0.5rem; color:var(--danger); border-color:var(--border-color);" onclick="deleteMenuItem(${item.id})">Excluir</button>
+          <button class="btn btn-secondary" style="flex:1; padding:0.5rem;" data-editar="${esc(item.id)}">Editar</button>
+          <button class="btn btn-outline" style="padding:0.5rem; color:var(--danger); border-color:var(--border-color);" data-apagar="${esc(item.id)}">Eliminar</button>
         </div>
-      </div>
-    `;
-  }).join('');
+      </div>`;
+    })
+    .join('');
+
+  container.querySelectorAll('[data-editar]').forEach((b) => {
+    b.addEventListener('click', () => openItemModal(Number(b.dataset.editar)));
+  });
+  container.querySelectorAll('[data-apagar]').forEach((b) => {
+    b.addEventListener('click', () => deleteMenuItem(Number(b.dataset.apagar)));
+  });
 }
 
 function openItemModal(id = null) {
   editingItemId = id;
   const overlay = document.getElementById('menu-item-overlay');
-  
+
   if (id) {
-    // Editar
-    document.getElementById('modal-action-title').innerText = 'Editar Item do Cardápio';
-    const item = menuItems.find(i => i.id === id);
+    document.getElementById('modal-action-title').innerText = 'Editar produto';
+    const item = menuItems.find((i) => i.id === id);
     if (item) {
       document.getElementById('item-nome').value = item.nome;
       document.getElementById('item-categoria').value = item.categoria;
@@ -318,17 +382,15 @@ function openItemModal(id = null) {
       document.getElementById('item-descricao').value = item.descricao || '';
       document.getElementById('item-imagem-url').value = item.imagem_url || '';
       document.getElementById('item-disponivel').checked = item.disponivel;
-      
       toggleDiscountInput(document.getElementById('item-desconto-checkbox'));
     }
   } else {
-    // Incluir
-    document.getElementById('modal-action-title').innerText = 'Adicionar Prato';
+    document.getElementById('modal-action-title').innerText = 'Adicionar produto';
     document.getElementById('item-form').reset();
     document.getElementById('item-disponivel').checked = true;
     toggleDiscountInput(document.getElementById('item-desconto-checkbox'));
   }
-  
+
   overlay.classList.add('open');
 }
 
@@ -337,314 +399,315 @@ function closeItemModal() {
 }
 
 function toggleDiscountInput(cb) {
-  document.getElementById('desconto-input-wrapper').style.display = cb.checked ? 'block' : 'none';
+  const wrapper = document.getElementById('desconto-input-wrapper');
+  if (wrapper) wrapper.style.display = cb && cb.checked ? 'block' : 'none';
 }
 
 async function handleSaveItem(e) {
   e.preventDefault();
-  const nome = document.getElementById('item-nome').value.trim();
-  const categoria = document.getElementById('item-categoria').value.trim();
-  const preco = parseFloat(document.getElementById('item-preco').value) || 0.0;
+
   const descontoAtivo = document.getElementById('item-desconto-checkbox').checked;
-  const precoDesconto = parseFloat(document.getElementById('item-preco-desconto').value) || 0.0;
-  const descricao = document.getElementById('item-descricao').value.trim();
-  const imagemUrl = document.getElementById('item-imagem-url').value.trim();
-  const disponivel = document.getElementById('item-disponivel').checked;
+  const preco = parseFloat(document.getElementById('item-preco').value) || 0;
+  const precoDesconto = parseFloat(document.getElementById('item-preco-desconto').value) || 0;
+
+  // Validação no cliente apenas para dar uma mensagem imediata; o servidor valida o mesmo,
+  // porque esta pode ser contornada.
+  if (preco <= 0) {
+    showToast('Indique um preço maior que zero.', 'error');
+    return;
+  }
+  if (descontoAtivo && (precoDesconto <= 0 || precoDesconto >= preco)) {
+    showToast('O preço com desconto tem de ser inferior ao preço normal.', 'error');
+    return;
+  }
 
   const payload = {
-    nome,
-    categoria,
+    nome: document.getElementById('item-nome').value.trim(),
+    categoria: document.getElementById('item-categoria').value.trim(),
     preco,
     desconto_ativo: descontoAtivo,
-    preco_desconto: descontoAtivo ? precoDesconto : 0.0,
-    descricao,
-    imagem_url: imagemUrl,
-    disponivel
+    preco_desconto: descontoAtivo ? precoDesconto : 0,
+    descricao: document.getElementById('item-descricao').value.trim(),
+    imagem_url: document.getElementById('item-imagem-url').value.trim(),
+    disponivel: document.getElementById('item-disponivel').checked,
   };
 
-  const url = editingItemId ? `/api/admin/cardapio/${editingItemId}` : '/api/admin/cardapio';
-  const method = editingItemId ? 'PUT' : 'POST';
-
   try {
-    const res = await fetch(url, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': adminToken
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!res.ok) throw new Error();
-    
-    showToast(editingItemId ? 'Prato atualizado com sucesso!' : 'Prato adicionado com sucesso!', 'success');
+    await api(
+      editingItemId ? `/api/admin/cardapio/${editingItemId}` : '/api/admin/cardapio',
+      { metodo: editingItemId ? 'PUT' : 'POST', corpo: payload }
+    );
+    showToast(editingItemId ? 'Produto actualizado.' : 'Produto adicionado.', 'success');
     closeItemModal();
     loadMenu();
   } catch (err) {
-    showToast('Falha ao salvar dados do item no cardápio.', 'error');
+    showToast(err.message, 'error');
   }
 }
 
 async function deleteMenuItem(id) {
-  if (!confirm('Tem certeza que deseja excluir permanentemente este item do cardápio?')) return;
+  if (!confirm('Eliminar definitivamente este produto do menu?')) return;
   try {
-    const res = await fetch(`/api/admin/cardapio/${id}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': adminToken }
-    });
-    if (!res.ok) throw new Error();
-    
-    showToast('Item removido com sucesso!', 'success');
+    await api(`/api/admin/cardapio/${id}`, { metodo: 'DELETE' });
+    showToast('Produto eliminado.', 'success');
     loadMenu();
   } catch (err) {
-    showToast('Erro ao remover item.', 'error');
+    showToast(err.message, 'error');
   }
 }
 
-// --- GESTÃO DE MÉTODOS DE PAGAMENTO ---
+// --- Métodos de pagamento ---
+
 async function loadPaymentsConfig() {
-  if (!adminToken) return;
+  if (!Sessao.temSessao()) return;
   try {
-    const res = await fetch('/api/admin/config', {
-      headers: { 'Authorization': adminToken }
-    });
-    if (!res.ok) throw new Error();
-    
-    const config = await res.json();
-    document.getElementById('config-pix-ativo').checked = config.pix_ativo;
-    document.getElementById('config-pix-chave').value = config.pix_chave || '';
-    document.getElementById('config-credito-ativo').checked = config.cartao_credito_ativo;
-    document.getElementById('config-debito-ativo').checked = config.cartao_debito_ativo;
-    document.getElementById('config-dinheiro-ativo').checked = config.dinheiro_ativo;
-    
-    togglePixInput(document.getElementById('config-pix-ativo'));
+    const config = await api('/api/admin/config');
+    definirCheck('config-credito-ativo', config.cartao_credito_ativo);
+    definirCheck('config-debito-ativo', config.cartao_debito_ativo);
+    definirCheck('config-dinheiro-ativo', config.dinheiro_ativo);
   } catch (err) {
-    showToast('Erro ao carregar configurações de pagamento.', 'error');
+    if (err.status === 403) return;
+    showToast('Não foi possível carregar os métodos de pagamento.', 'error');
   }
 }
 
-function togglePixInput(cb) {
-  document.getElementById('pix-key-wrapper').style.display = cb.checked ? 'block' : 'none';
+function definirCheck(id, valor) {
+  const el = document.getElementById(id);
+  if (el) el.checked = Boolean(valor);
+}
+
+function lerCheck(id) {
+  const el = document.getElementById(id);
+  return el ? el.checked : false;
 }
 
 async function handleSavePayments(e) {
   e.preventDefault();
-  const pix_ativo = document.getElementById('config-pix-ativo').checked;
-  const pix_chave = document.getElementById('config-pix-chave').value.trim();
-  const cartao_credito_ativo = document.getElementById('config-credito-ativo').checked;
-  const cartao_debito_ativo = document.getElementById('config-debito-ativo').checked;
-  const dinheiro_ativo = document.getElementById('config-dinheiro-ativo').checked;
-
-  if (pix_ativo && !pix_chave) {
-    showToast('Chave PIX obrigatória se o PIX estiver ativado.', 'error');
-    return;
-  }
 
   const payload = {
-    pix_ativo,
-    pix_chave,
-    cartao_credito_ativo,
-    cartao_debito_ativo,
-    dinheiro_ativo
+    cartao_credito_ativo: lerCheck('config-credito-ativo'),
+    cartao_debito_ativo: lerCheck('config-debito-ativo'),
+    dinheiro_ativo: lerCheck('config-dinheiro-ativo'),
   };
 
-  try {
-    const res = await fetch('/api/admin/config', {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': adminToken
-      },
-      body: JSON.stringify(payload)
-    });
-    if (!res.ok) throw new Error();
-    
-    showToast('Métodos de pagamento atualizados!', 'success');
-    loadPaymentsConfig();
-  } catch (err) {
-    showToast('Erro ao salvar as configurações de pagamento.', 'error');
-  }
-}
-
-// Configura eventos gerais do painel
-function setupEventListeners() {
-  document.getElementById('login-form').addEventListener('submit', handleLogin);
-  document.getElementById('nav-logout-btn').addEventListener('click', handleLogout);
-  
-  // Navegação
-  document.getElementById('nav-pedidos').addEventListener('click', () => switchTab('pedidos'));
-  document.getElementById('nav-cardapio').addEventListener('click', () => switchTab('cardapio'));
-  document.getElementById('nav-pagamentos').addEventListener('click', () => switchTab('pagamentos'));
-  document.getElementById('nav-usuarios').addEventListener('click', () => switchTab('usuarios'));
-  document.getElementById('nav-configuracoes').addEventListener('click', () => switchTab('configuracoes'));
-  
-  // Cardápio
-  document.getElementById('btn-add-item').addEventListener('click', () => openItemModal());
-  document.getElementById('modal-close-btn').addEventListener('click', closeItemModal);
-  document.getElementById('item-form').addEventListener('submit', handleSaveItem);
-  document.getElementById('item-desconto-checkbox').addEventListener('change', (e) => toggleDiscountInput(e.target));
-  
-  // Pagamentos
-  document.getElementById('config-pix-ativo').addEventListener('change', (e) => togglePixInput(e.target));
-  document.getElementById('payments-form').addEventListener('submit', handleSavePayments);
-
-  // Usuários
-  document.getElementById('btn-add-user').addEventListener('click', openUserModal);
-  document.getElementById('user-modal-close-btn').addEventListener('click', closeUserModal);
-  document.getElementById('user-modal-cancel-btn').addEventListener('click', closeUserModal);
-  document.getElementById('user-form').addEventListener('submit', handleSaveUser);
-
-  // Configurações Gerais
-  document.getElementById('general-config-form').addEventListener('submit', handleSaveGeneralConfig);
-  document.getElementById('btn-check-dns').addEventListener('click', handleCheckDNS);
-}
-
-// --- GESTÃO DE CONFIGURAÇÕES GERAIS ---
-async function loadGeneralConfig() {
-  if (!adminToken) return;
-  try {
-    const res = await fetch('/api/admin/config', {
-      headers: { 'Authorization': adminToken }
-    });
-    if (!res.ok) throw new Error();
-    const config = await res.json();
-    
-    document.getElementById('config-rest-nome').value = config.nome || '';
-    document.getElementById('config-rest-domain').value = config.domain || '';
-
-    const mainDomain = config.main_domain || 'deliverysistema.com.br';
-    const protocol = window.location.protocol;
-    const port = window.location.port ? `:${window.location.port}` : '';
-    
-    let subdomainUrl = "";
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      subdomainUrl = `${protocol}//${window.location.hostname}${port}/menu?tenant=${config.slug}`;
-    } else {
-      subdomainUrl = `${protocol}//${config.slug}.${mainDomain}${port}/menu`;
-    }
-    
-    const subdomainLink = document.getElementById('lbl-subdomain-link');
-    subdomainLink.href = subdomainUrl;
-    subdomainLink.innerText = subdomainUrl;
-    document.getElementById('lbl-main-domain').innerText = mainDomain;
-
-    // Oculta wrapper de status de DNS anterior ao carregar
-    document.getElementById('dns-status-wrapper').style.display = 'none';
-  } catch (err) {
-    showToast('Erro ao carregar configurações gerais.', 'error');
-  }
-}
-
-async function handleCheckDNS() {
-  const domain = document.getElementById('config-rest-domain').value.trim();
-  if (!domain) {
-    showToast('Digite um domínio próprio para testar.', 'error');
+  if (!payload.cartao_credito_ativo && !payload.cartao_debito_ativo && !payload.dinheiro_ativo) {
+    showToast('Active pelo menos um método de pagamento, ou não poderá receber encomendas.', 'error');
     return;
   }
 
-  const wrapper = document.getElementById('dns-status-wrapper');
-  wrapper.style.display = 'block';
-  wrapper.style.background = 'rgba(255,255,255,0.05)';
-  wrapper.style.color = '#fff';
-  wrapper.innerText = 'Consultando servidores DNS...';
-
   try {
-    const res = await fetch(`/api/admin/config/check-dns?domain=${encodeURIComponent(domain)}`, {
-      headers: { 'Authorization': adminToken }
-    });
-    if (!res.ok) throw new Error();
-    const data = await res.json();
-
-    if (data.configured) {
-      wrapper.style.background = 'rgba(46, 213, 115, 0.1)';
-      wrapper.style.color = '#2ed573';
-      wrapper.innerHTML = `<strong>✓ Conectado com sucesso!</strong> Seu domínio está apontando corretamente para o nosso servidor e o SSL será ativado no primeiro acesso.`;
-    } else {
-      wrapper.style.background = 'rgba(255, 71, 87, 0.1)';
-      wrapper.style.color = '#ff4757';
-      wrapper.innerHTML = `<strong>⚠️ Apontamento pendente.</strong> O domínio não parece estar apontando para nosso servidor ainda. Verifique as configurações de CNAME/A na sua registradora de domínio.`;
-    }
+    await api('/api/admin/config', { metodo: 'PUT', corpo: payload });
+    showToast('Métodos de pagamento actualizados.', 'success');
+    loadPaymentsConfig();
   } catch (err) {
-    wrapper.style.background = 'rgba(255, 71, 87, 0.1)';
-    wrapper.style.color = '#ff4757';
-    wrapper.innerText = 'Falha ao consultar DNS. Tente novamente.';
+    showToast(err.message, 'error');
   }
 }
 
+// --- Configurações gerais e domínio ---
+
+async function loadGeneralConfig() {
+  if (!Sessao.temSessao()) return;
+  try {
+    const config = await api('/api/admin/config');
+
+    definirValor('config-rest-nome', config.nome || '');
+    definirValor('config-rest-nif', config.nif || '');
+    definirValor('config-rest-domain', config.domain || '');
+
+    const link = document.getElementById('lbl-subdomain-link');
+    if (link) {
+      const url = config.storefront_url || '#';
+      link.href = url;
+      link.innerText = url;
+    }
+    const lblDominio = document.getElementById('lbl-main-domain');
+    if (lblDominio) lblDominio.innerText = config.main_domain || '';
+
+    mostrarEstadoDominio(config);
+  } catch (err) {
+    if (err.status === 403) return;
+    showToast('Não foi possível carregar as configurações.', 'error');
+  }
+}
+
+function definirValor(id, valor) {
+  const el = document.getElementById(id);
+  if (el) el.value = valor;
+}
+
+// mostrarEstadoDominio comunica em que ponto do fluxo de verificação o domínio está.
+function mostrarEstadoDominio(config) {
+  const wrapper = document.getElementById('dns-status-wrapper');
+  if (!wrapper) return;
+
+  if (!config.domain) {
+    wrapper.style.display = 'none';
+    return;
+  }
+
+  wrapper.style.display = 'block';
+
+  if (config.domain_status === 'verified') {
+    wrapper.style.background = 'rgba(46, 213, 115, 0.1)';
+    wrapper.style.color = '#2ed573';
+    wrapper.innerHTML = `<strong>✓ Domínio verificado.</strong> ${esc(config.domain)} está activo; o certificado é emitido no primeiro acesso.`;
+    return;
+  }
+
+  wrapper.style.background = 'rgba(255, 165, 2, 0.1)';
+  wrapper.style.color = '#ffa502';
+  wrapper.innerHTML =
+    '<strong>Verificação pendente.</strong> Guarde o domínio para obter o registo TXT e depois clique em verificar.';
+}
+
+// handleSaveGeneralConfig grava o nome e o NIF; o domínio segue o seu próprio fluxo.
 async function handleSaveGeneralConfig(e) {
   e.preventDefault();
+
   const nome = document.getElementById('config-rest-nome').value.trim();
-  const domain = document.getElementById('config-rest-domain').value.trim();
+  const nifEl = document.getElementById('config-rest-nif');
 
   try {
-    const res = await fetch('/api/admin/config', {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': adminToken
-      },
-      body: JSON.stringify({ nome, domain: domain || null })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Erro ao salvar configurações gerais.');
+    const payload = { nome };
+    if (nifEl) payload.nif = nifEl.value.trim();
 
-    showToast('Configurações gerais salvas com sucesso!', 'success');
-    localStorage.setItem('admin_name', nome);
-    document.getElementById('logged-user-name').innerText = nome;
+    await api('/api/admin/config', { metodo: 'PUT', corpo: payload });
+    showToast('Configurações guardadas.', 'success');
     loadGeneralConfig();
   } catch (err) {
     showToast(err.message, 'error');
   }
 }
 
-// --- GESTÃO DE USUÁRIOS ---
-let users = [];
+// handleSaveDomain inicia a verificação de propriedade e mostra o registo TXT a criar.
+async function handleSaveDomain() {
+  const domain = document.getElementById('config-rest-domain').value.trim();
+
+  try {
+    const dados = await api('/api/admin/config/dominio', {
+      metodo: 'POST',
+      corpo: { domain },
+    });
+
+    if (!dados.registo_txt) {
+      showToast(dados.message || 'Domínio removido.', 'success');
+      loadGeneralConfig();
+      return;
+    }
+
+    const wrapper = document.getElementById('dns-status-wrapper');
+    wrapper.style.display = 'block';
+    wrapper.style.background = 'rgba(255, 165, 2, 0.1)';
+    wrapper.style.color = '#ffa502';
+    wrapper.innerHTML = `
+      <strong>Falta um passo: provar que o domínio é seu.</strong>
+      <p style="margin:0.5rem 0;">Crie este registo no seu registrador de domínios:</p>
+      <table style="width:100%; font-size:0.85rem; margin-bottom:0.75rem;">
+        <tr><td style="padding:2px 8px 2px 0;">Tipo</td><td><code>${esc(dados.registo_txt.tipo)}</code></td></tr>
+        <tr><td style="padding:2px 8px 2px 0;">Nome</td><td><code>${esc(dados.registo_txt.nome)}</code></td></tr>
+        <tr><td style="padding:2px 8px 2px 0;">Valor</td><td><code>${esc(dados.registo_txt.valor)}</code></td></tr>
+      </table>
+      <p style="margin:0.5rem 0;">E este, para encaminhar o tráfego:</p>
+      <table style="width:100%; font-size:0.85rem;">
+        <tr><td style="padding:2px 8px 2px 0;">Tipo</td><td><code>${esc(dados.registo_encaminhamento.tipo)}</code></td></tr>
+        <tr><td style="padding:2px 8px 2px 0;">Nome</td><td><code>${esc(dados.registo_encaminhamento.nome)}</code></td></tr>
+        <tr><td style="padding:2px 8px 2px 0;">Valor</td><td><code>${esc(dados.registo_encaminhamento.valor)}</code></td></tr>
+      </table>
+      <p style="margin-top:0.75rem; font-size:0.8rem;">${esc(dados.registo_encaminhamento.nota || '')}</p>
+    `;
+    showToast('Crie o registo TXT e depois clique em verificar.', 'info');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function handleVerifyDomain() {
+  const wrapper = document.getElementById('dns-status-wrapper');
+  wrapper.style.display = 'block';
+  wrapper.style.background = 'rgba(255,255,255,0.05)';
+  wrapper.style.color = '#fff';
+  wrapper.innerText = 'A consultar os servidores DNS...';
+
+  try {
+    const dados = await api('/api/admin/config/dominio/verificar', { metodo: 'POST' });
+
+    if (dados.verificado) {
+      wrapper.style.background = 'rgba(46, 213, 115, 0.1)';
+      wrapper.style.color = '#2ed573';
+      wrapper.innerHTML = `<strong>✓ Domínio verificado.</strong> ${esc(dados.message)}`;
+      loadGeneralConfig();
+    } else {
+      wrapper.style.background = 'rgba(255, 165, 2, 0.1)';
+      wrapper.style.color = '#ffa502';
+      wrapper.innerHTML = `<strong>Ainda não.</strong> ${esc(dados.motivo)}`;
+    }
+  } catch (err) {
+    wrapper.style.background = 'rgba(255, 71, 87, 0.1)';
+    wrapper.style.color = '#ff4757';
+    wrapper.innerText = err.message;
+  }
+}
+
+// --- Utilizadores ---
+
+const ETIQUETAS_ROLE = {
+  owner: 'Proprietário',
+  admin: 'Administrador',
+  gerente: 'Gerente',
+  funcionario: 'Funcionário',
+};
 
 async function loadUsers() {
-  if (!adminToken) return;
+  if (!Sessao.temSessao()) return;
   try {
-    const res = await fetch('/api/admin/usuarios', {
-      headers: { 'Authorization': adminToken }
-    });
-    if (!res.ok) throw new Error();
-    users = await res.json();
+    users = (await api('/api/admin/usuarios')) || [];
     renderUsers();
   } catch (err) {
-    showToast('Erro ao carregar usuários.', 'error');
+    if (err.status === 403) {
+      showToast('Não tem permissões para gerir utilizadores.', 'error');
+      return;
+    }
+    showToast('Não foi possível carregar os utilizadores.', 'error');
   }
 }
 
 function renderUsers() {
   const container = document.getElementById('users-list-table');
+  if (!container) return;
+
   if (users.length === 0) {
-    container.innerHTML = `<tr><td colspan="5" style="text-align:center; padding: 2rem;">Nenhum usuário cadastrado.</td></tr>`;
+    container.innerHTML =
+      '<tr><td colspan="5" style="text-align:center; padding: 2rem;">Nenhum utilizador registado.</td></tr>';
     return;
   }
 
-  container.innerHTML = users.map(user => {
-    const statusText = user.ativo ? '<span style="color:var(--success);">✓ Ativo</span>' : '<span style="color:var(--text-muted);">Inativo</span>';
-    const isOwner = user.role === 'owner';
-    const roleLabel = {
-      'owner': 'Proprietário (Owner)',
-      'admin': 'Administrador',
-      'gerente': 'Gerente',
-      'funcionario': 'Funcionário'
-    }[user.role] || user.role;
+  container.innerHTML = users
+    .map((user) => {
+      const estado = user.ativo
+        ? '<span style="color:var(--success);">✓ Activo</span>'
+        : '<span style="color:var(--text-muted);">Inactivo</span>';
+      const isOwner = user.role === 'owner';
+      const etiqueta = ETIQUETAS_ROLE[user.role] || user.role;
 
-    const deleteBtn = isOwner 
-      ? `<span style="font-size:0.8rem; color:var(--text-muted); font-style:italic;">Sistema</span>` 
-      : `<button class="btn btn-outline" style="padding: 0.25rem 0.5rem; font-size: 0.8rem; border-color: rgba(255, 71, 87, 0.3); color: #ff4757;" onclick="deleteUser(${user.id})">Excluir</button>`;
+      const botao = isOwner
+        ? '<span style="font-size:0.8rem; color:var(--text-muted); font-style:italic;">Proprietário</span>'
+        : `<button class="btn btn-outline" style="padding: 0.25rem 0.5rem; font-size: 0.8rem; border-color: rgba(255, 71, 87, 0.3); color: #ff4757;" data-remover="${esc(user.id)}">Remover</button>`;
 
-    return `
+      return `
       <tr style="border-bottom: 1px solid var(--border-color);">
-        <td style="padding: 0.75rem 0.5rem; font-weight:600; color:#fff;">${user.nome}</td>
-        <td style="padding: 0.75rem 0.5rem;">${user.email}</td>
-        <td style="padding: 0.75rem 0.5rem;"><span class="badge ${isOwner ? 'badge-primary' : 'badge-secondary'}" style="font-size:0.75rem; text-transform:uppercase;">${roleLabel}</span></td>
-        <td style="padding: 0.75rem 0.5rem;">${statusText}</td>
-        <td style="padding: 0.75rem 0.5rem; text-align: right;">${deleteBtn}</td>
-      </tr>
-    `;
-  }).join('');
+        <td style="padding: 0.75rem 0.5rem; font-weight:600; color:#fff;">${esc(user.nome)}</td>
+        <td style="padding: 0.75rem 0.5rem;">${esc(user.email)}</td>
+        <td style="padding: 0.75rem 0.5rem;"><span class="badge ${isOwner ? 'badge-primary' : 'badge-secondary'}" style="font-size:0.75rem; text-transform:uppercase;">${esc(etiqueta)}</span></td>
+        <td style="padding: 0.75rem 0.5rem;">${estado}</td>
+        <td style="padding: 0.75rem 0.5rem; text-align: right;">${botao}</td>
+      </tr>`;
+    })
+    .join('');
+
+  container.querySelectorAll('[data-remover]').forEach((b) => {
+    b.addEventListener('click', () => deleteUser(Number(b.dataset.remover)));
+  });
 }
 
 function openUserModal() {
@@ -658,24 +721,22 @@ function closeUserModal() {
 
 async function handleSaveUser(e) {
   e.preventDefault();
-  const nome = document.getElementById('user-nome').value.trim();
-  const email = document.getElementById('user-email').value.trim();
-  const password = document.getElementById('user-password').value;
-  const role = document.getElementById('user-role').value;
+
+  const payload = {
+    nome: document.getElementById('user-nome').value.trim(),
+    email: document.getElementById('user-email').value.trim(),
+    password: document.getElementById('user-password').value,
+    role: document.getElementById('user-role').value,
+  };
+
+  if (payload.password.length < 8) {
+    showToast('A senha tem de ter pelo menos 8 caracteres, com letras e números.', 'error');
+    return;
+  }
 
   try {
-    const res = await fetch('/api/admin/usuarios', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': adminToken
-      },
-      body: JSON.stringify({ nome, email, password, role })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Erro ao cadastrar usuário.');
-
-    showToast('Usuário cadastrado com sucesso!', 'success');
+    await api('/api/admin/usuarios', { metodo: 'POST', corpo: payload });
+    showToast('Utilizador criado.', 'success');
     closeUserModal();
     loadUsers();
   } catch (err) {
@@ -684,18 +745,50 @@ async function handleSaveUser(e) {
 }
 
 async function deleteUser(id) {
-  if (!confirm('Deseja realmente remover este usuário do painel?')) return;
+  if (!confirm('Remover este utilizador do painel?')) return;
   try {
-    const res = await fetch(`/api/admin/usuarios/${id}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': adminToken }
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Erro ao remover usuário.');
-
-    showToast('Usuário removido com sucesso!', 'success');
+    await api(`/api/admin/usuarios/${id}`, { metodo: 'DELETE' });
+    showToast('Utilizador removido.', 'success');
     loadUsers();
   } catch (err) {
     showToast(err.message, 'error');
   }
+}
+
+// --- Eventos ---
+
+// ligar associa um handler só se o elemento existir, para que uma diferença entre o HTML e
+// este ficheiro não interrompa a inicialização de todo o painel.
+function ligar(id, evento, handler) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener(evento, handler);
+}
+
+function setupEventListeners() {
+  ligar('login-form', 'submit', handleLogin);
+  ligar('nav-logout-btn', 'click', handleLogout);
+  ligar('link-esqueci-senha', 'click', (e) => {
+    e.preventDefault();
+    handleEsqueciSenha();
+  });
+
+  ['pedidos', 'cardapio', 'pagamentos', 'usuarios', 'configuracoes'].forEach((nome) => {
+    ligar(`nav-${nome}`, 'click', () => switchTab(nome));
+  });
+
+  ligar('btn-add-item', 'click', () => openItemModal());
+  ligar('modal-close-btn', 'click', closeItemModal);
+  ligar('item-form', 'submit', handleSaveItem);
+  ligar('item-desconto-checkbox', 'change', (e) => toggleDiscountInput(e.target));
+
+  ligar('payments-form', 'submit', handleSavePayments);
+
+  ligar('btn-add-user', 'click', openUserModal);
+  ligar('user-modal-close-btn', 'click', closeUserModal);
+  ligar('user-modal-cancel-btn', 'click', closeUserModal);
+  ligar('user-form', 'submit', handleSaveUser);
+
+  ligar('general-config-form', 'submit', handleSaveGeneralConfig);
+  ligar('btn-save-domain', 'click', handleSaveDomain);
+  ligar('btn-check-dns', 'click', handleVerifyDomain);
 }
