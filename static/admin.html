@@ -382,7 +382,11 @@
 
             <div class="form-group" style="margin-top: 1.5rem; background: rgba(255,255,255,0.03); border:1px solid var(--border-color); padding: 1rem; border-radius: var(--radius-sm);">
               <label style="display:block; margin-bottom: 0.25rem;">Seu Subdomínio Grátis:</label>
-              <a href="#" id="lbl-subdomain-link" target="_blank" style="color: var(--primary); font-weight:600; text-decoration:none; word-break: break-all;">carregando...</a>
+              <span id="storefront-estado" style="display:none; align-items:center; gap:0.5rem; font-size:0.9rem;">
+                <span class="spinner-espera" aria-hidden="true"></span>
+                <span id="storefront-estado-texto">A preparar o seu endereço…</span>
+              </span>
+              <a hidden href="#" id="lbl-subdomain-link" target="_blank" style="color: var(--primary); font-weight:600; text-decoration:none; word-break: break-all;">carregando...</a>
             </div>
 
             <button type="submit" class="btn btn-primary" style="margin-top: 2rem; width: 100%;">Salvar Configurações Gerais</button>

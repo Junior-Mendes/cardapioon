@@ -222,6 +222,9 @@ func construirRouter(
 	admin := r.Group("/api/admin", middleware.RequireAuth(h.Tokens))
 	{
 		admin.GET("/config", h.GetConfig)
+		// Estado do endereço público, sondado pelo painel enquanto o Traefik publica a
+		// rota e o Let's Encrypt emite o certificado.
+		admin.GET("/storefront/status", h.StorefrontStatus)
 		admin.POST("/conta/alterar-senha", h.AlterarSenha)
 
 		// Configuração do restaurante e domínio: apenas owner e admin.

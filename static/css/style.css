@@ -402,3 +402,34 @@ select.form-control optgroup {
     flex-basis: calc(50% - 0.4rem);
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Indicador de espera
+   ---------------------------------------------------------------------------
+   Usado enquanto o endereço público de um restaurante novo é publicado no
+   encaminhador e o certificado é emitido. Nessa janela não é possível servir uma
+   página no próprio subdomínio — sem rota o pedido não chega à aplicação, e sem
+   certificado o browser falha antes de haver HTTP — pelo que a espera é mostrada
+   no painel. */
+.spinner-espera {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex: none;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: girar 0.8s linear infinite;
+}
+
+@keyframes girar {
+  to { transform: rotate(360deg); }
+}
+
+/* Respeita quem pediu ao sistema para reduzir animações: a rotação contínua é
+   desconfortável para algumas pessoas e pode desencadear enxaquecas. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner-espera {
+    animation-duration: 2.4s;
+  }
+}

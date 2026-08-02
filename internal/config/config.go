@@ -39,6 +39,10 @@ type Config struct {
 	TraefikDynamicDir string
 	BackendURL        string
 	UploadDir         string
+	// TraefikInternalAddr é o endereço TLS do Traefik na rede interna. Usado para
+	// confirmar, sem depender de DNS externo, se o endereço de um restaurante já
+	// responde e já tem certificado.
+	TraefikInternalAddr string
 
 	// Operação
 	SeedDemoData   bool
@@ -76,9 +80,10 @@ func LoadConfig() (*Config, error) {
 		MailFrom:     getEnv("MAIL_FROM", ""),
 		MailFromName: getEnv("MAIL_FROM_NAME", "Cardápio Online"),
 
-		TraefikDynamicDir: getEnv("TRAEFIK_DYNAMIC_DIR", "/traefik_dynamic"),
-		BackendURL:        getEnv("BACKEND_URL", "http://cardapio_online_api:8081"),
-		UploadDir:         getEnv("UPLOAD_DIR", "./static/uploads"),
+		TraefikDynamicDir:   getEnv("TRAEFIK_DYNAMIC_DIR", "/traefik_dynamic"),
+		BackendURL:          getEnv("BACKEND_URL", "http://cardapio_online_api:8081"),
+		UploadDir:           getEnv("UPLOAD_DIR", "./static/uploads"),
+		TraefikInternalAddr: getEnv("TRAEFIK_INTERNAL_ADDR", "cardapio_traefik:443"),
 
 		SeedDemoData: getEnvBool("SEED_DEMO_DATA", false),
 	}

@@ -55,7 +55,9 @@ async function registar(e) {
 
     showToast('Conta criada. A abrir o seu painel...', 'success');
     setTimeout(() => {
-      window.location.href = '/admin';
+      // O parâmetro faz o painel abrir directamente onde o endereço está a ser
+      // preparado, em vez de deixar o lojista à procura.
+      window.location.href = '/admin?novo=1';
     }, 1200);
   } catch (err) {
     showToast(err.message, 'error');

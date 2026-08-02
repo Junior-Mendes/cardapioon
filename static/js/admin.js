@@ -49,6 +49,16 @@ function checkAuth() {
 
   loadDashboardData();
 
+  // Registo acabado de fazer: abre as Configurações, onde o estado do endereço é
+  // mostrado, em vez de deixar o lojista num quadro de encomendas vazio sem saber se
+  // a loja já está no ar.
+  if (new URLSearchParams(window.location.search).get('novo') === '1') {
+    switchTab('configuracoes');
+    showToast('Bem-vindo! Estamos a preparar o seu endereço.', 'info');
+    // Limpa o parâmetro para que um refresh não repita a mensagem.
+    window.history.replaceState({}, '', '/admin');
+  }
+
   // Actualização periódica das encomendas.
   //
   // Continua a ser polling, mas agora sobre uma lista paginada em vez de todas as
@@ -92,6 +102,7 @@ async function handleLogout() {
       /* ignorado de propósito */
     }
   }
+  pararVigilanciaStorefront();
   Sessao.limpar();
   window.location.reload();
 }
@@ -130,6 +141,8 @@ function switchTab(tab) {
     const nav = document.getElementById(`nav-${nome}`);
     if (nav) nav.classList.toggle('active', tab === nome);
   });
+
+  if (tab !== 'configuracoes') pararVigilanciaStorefront();
 
   if (tab === 'usuarios') loadUsers();
   else if (tab === 'configuracoes') loadGeneralConfig();
@@ -577,6 +590,10 @@ async function loadGeneralConfig() {
     if (lblDominio) lblDominio.innerText = config.main_domain || '';
 
     mostrarEstadoDominio(config);
+
+    // O link do subdomínio só é revelado quando o endereço responde de facto.
+    tentativasStorefront = 0;
+    vigiarStorefront();
   } catch (err) {
     if (err.status === 403) return;
     showToast('Não foi possível carregar as configurações.', 'error');
@@ -906,6 +923,99 @@ function luminanciaRelativa([r, g, b]) {
     return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
   };
   return 0.2126 * canal(r) + 0.7152 * canal(g) + 0.0722 * canal(b);
+}
+
+// --- Estado do endereço público ---
+
+// Sondagem do estado do endereço, activa apenas enquanto ainda não está pronto.
+let timerStorefront = null;
+let tentativasStorefront = 0;
+
+// Limite de sondagens: 2s × 45 ≈ 90 segundos. O certificado costuma ser emitido em
+// menos de um minuto; passado esse tempo é mais honesto dizer que algo não está bem do
+// que continuar a girar indefinidamente.
+const MAX_TENTATIVAS_STOREFRONT = 45;
+
+/**
+ * vigiarStorefront mostra o estado do endereço público e liberta o link quando responder.
+ *
+ * Existe uma janela de alguns segundos entre criar o restaurante e o endereço funcionar: o
+ * encaminhador tem de detectar a rota nova e o certificado tem de ser emitido. Dar ao
+ * lojista um link que devolve erro nesse intervalo parece uma avaria do produto.
+ *
+ * A espera é mostrada aqui, no painel, e não no subdomínio: sem rota o pedido não chega à
+ * aplicação, e sem certificado o browser falha no TLS antes de haver HTTP, pelo que não há
+ * como servir uma página de espera nesse endereço.
+ */
+async function vigiarStorefront() {
+  const caixa = document.getElementById('storefront-estado');
+  const texto = document.getElementById('storefront-estado-texto');
+  const link = document.getElementById('lbl-subdomain-link');
+  if (!caixa || !link) return;
+
+  let dados;
+  try {
+    dados = await api('/api/admin/storefront/status');
+  } catch (err) {
+    if (err.status === 403) return; // sem permissões para ver configurações
+    // Uma falha de rede não deve esconder o link: é mais útil mostrá-lo do que
+    // deixar o lojista sem nada.
+    mostrarStorefrontPronto();
+    return;
+  }
+
+  if (dados.pronto) {
+    mostrarStorefrontPronto(dados.url);
+    return;
+  }
+
+  // Ainda não está pronto: mostra o motivo e volta a perguntar.
+  caixa.style.display = 'inline-flex';
+  link.hidden = true;
+  if (texto) {
+    texto.textContent =
+      dados.detalhe ||
+      'A preparar o seu endereço. Pode entretanto começar a criar o seu menu.';
+  }
+
+  tentativasStorefront++;
+  if (tentativasStorefront >= MAX_TENTATIVAS_STOREFRONT) {
+    pararVigilanciaStorefront();
+    if (texto) {
+      texto.textContent =
+        'O endereço está a demorar mais do que o normal. Tente abrir o link; se falhar, contacte o suporte.';
+    }
+    const spinner = caixa.querySelector('.spinner-espera');
+    if (spinner) spinner.style.display = 'none';
+    link.hidden = false;
+    return;
+  }
+
+  if (!timerStorefront) {
+    timerStorefront = setInterval(vigiarStorefront, 2000);
+  }
+}
+
+function mostrarStorefrontPronto(url) {
+  pararVigilanciaStorefront();
+
+  const caixa = document.getElementById('storefront-estado');
+  const link = document.getElementById('lbl-subdomain-link');
+  if (caixa) caixa.style.display = 'none';
+  if (link) {
+    if (url) {
+      link.href = url;
+      link.innerText = url;
+    }
+    link.hidden = false;
+  }
+}
+
+function pararVigilanciaStorefront() {
+  if (timerStorefront) {
+    clearInterval(timerStorefront);
+    timerStorefront = null;
+  }
 }
 
 // --- Utilizadores ---
