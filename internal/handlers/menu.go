@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"cardapio-online/internal/dinheiro"
 	"cardapio-online/internal/middleware"
 	"cardapio-online/internal/models"
 	"cardapio-online/internal/validate"
@@ -69,35 +70,116 @@ func (h *Handler) GetPublicMenu(c *gin.Context) {
 		restaurante["cor_secundaria"] = t.CorSecundaria
 	}
 
+	// Nota de IVA. Em Portugal os preços afixados ao consumidor final incluem imposto;
+	// dizê-lo explicitamente é a prática habitual e evita dúvidas na caixa.
+	restaurante["iva_incluido"] = true
+	restaurante["nota_iva"] = "Preços com IVA incluído à taxa legal em vigor"
+
+	// Cada item leva o preço a cobrar já resolvido (com desconto, se activo) e a
+	// decomposição de IVA, para que o cliente veja o valor exacto sem o frontend ter de
+	// repetir o cálculo.
+	itensPublicos := make([]gin.H, 0, len(itens))
+	for i := range itens {
+		it := &itens[i]
+		efetivo := it.PrecoEfetivoCents()
+		iva := dinheiro.IVAIncluido(efetivo, it.TaxaIVABP)
+
+		itensPublicos = append(itensPublicos, gin.H{
+			"id":                   it.ID,
+			"nome":                 it.Nome,
+			"descricao":            it.Descricao,
+			"categoria":            it.Categoria,
+			"imagem_url":           it.ImagemURL,
+			"disponivel":           it.Disponivel,
+			"preco_cents":          it.PrecoCents,
+			"preco_desconto_cents": it.PrecoDescontoCents,
+			"desconto_ativo":       it.DescontoAtivo,
+			"preco_efetivo_cents":  efetivo,
+			"taxa_iva_bp":          it.TaxaIVABP,
+			"taxa_iva_texto":       it.TaxaIVABP.Percentagem(),
+			"iva_cents":            iva,
+			"base_cents":           efetivo - iva,
+		})
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"restaurante": restaurante,
-		"itens":       itens,
+		"itens":       itensPublicos,
 	})
 }
 
 type menuItemInput struct {
-	Nome          string  `json:"nome" binding:"required,min=1,max=150"`
-	Descricao     string  `json:"descricao" binding:"max=2000"`
-	Preco         float64 `json:"preco" binding:"required,gt=0"`
-	PrecoDesconto float64 `json:"preco_desconto" binding:"gte=0"`
-	DescontoAtivo bool    `json:"desconto_ativo"`
-	Categoria     string  `json:"categoria" binding:"required,min=1,max=50"`
-	ImagemURL     string  `json:"imagem_url" binding:"max=1000"`
-	Disponivel    *bool   `json:"disponivel"`
+	Nome      string `json:"nome" binding:"required,min=1,max=150"`
+	Descricao string `json:"descricao" binding:"max=2000"`
+
+	// O preço é aceite como texto para não passar por float em nenhum ponto: "12,50",
+	// "12.50" e "12,5" são todos válidos e convertidos directamente para cêntimos.
+	// Os campos float são aceites por compatibilidade com clientes antigos.
+	PrecoTexto         string  `json:"preco_texto"`
+	PrecoDescontoTexto string  `json:"preco_desconto_texto"`
+	Preco              float64 `json:"preco"`
+	PrecoDesconto      float64 `json:"preco_desconto"`
+
+	// TaxaIVABP é escolhida pelo estabelecimento para este produto. Ausente significa
+	// usar a taxa por omissão do restaurante.
+	TaxaIVABP *int32 `json:"taxa_iva_bp"`
+
+	DescontoAtivo bool   `json:"desconto_ativo"`
+	Categoria     string `json:"categoria" binding:"required,min=1,max=50"`
+	ImagemURL     string `json:"imagem_url" binding:"max=1000"`
+	Disponivel    *bool  `json:"disponivel"`
+
+	// Preenchidos por resolverValores.
+	precoCents         dinheiro.Cents
+	precoDescontoCents dinheiro.Cents
+	taxa               dinheiro.TaxaBP
 }
 
-// validar aplica as regras que o binding não cobre.
+// resolverValores converte os campos de entrada em cêntimos e resolve a taxa de IVA.
+func (in *menuItemInput) resolverValores(taxaOmissao dinheiro.TaxaBP) error {
+	var err error
+
+	if strings.TrimSpace(in.PrecoTexto) != "" {
+		if in.precoCents, err = dinheiro.Parse(in.PrecoTexto); err != nil {
+			return fmt.Errorf("preço: %w", err)
+		}
+	} else {
+		in.precoCents = dinheiro.DeEuros(in.Preco)
+	}
+
+	if strings.TrimSpace(in.PrecoDescontoTexto) != "" {
+		if in.precoDescontoCents, err = dinheiro.Parse(in.PrecoDescontoTexto); err != nil {
+			return fmt.Errorf("preço com desconto: %w", err)
+		}
+	} else {
+		in.precoDescontoCents = dinheiro.DeEuros(in.PrecoDesconto)
+	}
+
+	in.taxa = taxaOmissao
+	if in.TaxaIVABP != nil {
+		in.taxa = dinheiro.TaxaBP(*in.TaxaIVABP)
+	}
+	if !in.taxa.Valida() {
+		return errors.New("taxa de IVA inválida")
+	}
+	return nil
+}
+
+// validar aplica as regras que o binding não cobre. Corre depois de resolverValores.
 func (in *menuItemInput) validar() error {
-	if in.Preco > 100000 {
+	if in.precoCents <= 0 {
+		return errors.New("indique um preço maior que zero")
+	}
+	if in.precoCents > dinheiro.MaxCents {
 		return errors.New("preço acima do limite permitido")
 	}
 	// A versão anterior aceitava um desconto superior ao preço, o que produzia encomendas
 	// com valor negativo.
 	if in.DescontoAtivo {
-		if in.PrecoDesconto <= 0 {
+		if in.precoDescontoCents <= 0 {
 			return errors.New("indique o preço com desconto")
 		}
-		if in.PrecoDesconto >= in.Preco {
+		if in.precoDescontoCents >= in.precoCents {
 			return errors.New("o preço com desconto tem de ser inferior ao preço normal")
 		}
 	}
@@ -119,24 +201,17 @@ func urlImagemAceitavel(u string) bool {
 func (in *menuItemInput) aplicar(item *models.MenuItem) {
 	item.Nome = limparLinha(in.Nome, 150)
 	item.Descricao = limparTexto(in.Descricao, 2000)
-	item.Preco = arredondarCentimos(in.Preco)
-	item.PrecoDesconto = arredondarCentimos(in.PrecoDesconto)
+	item.PrecoCents = in.precoCents
+	item.PrecoDescontoCents = in.precoDescontoCents
+	item.TaxaIVABP = in.taxa
 	item.DescontoAtivo = in.DescontoAtivo
 	item.Categoria = limparLinha(in.Categoria, 50)
 	item.ImagemURL = strings.TrimSpace(in.ImagemURL)
 	if in.Disponivel != nil {
 		item.Disponivel = *in.Disponivel
 	}
-}
-
-// arredondarCentimos limita os valores a duas casas decimais.
-//
-// Mitigação temporária: os montantes continuam em float64 e a migração para inteiros em
-// cêntimos está planeada para a Fase 1. Sem este arredondamento, um preço enviado com
-// mais casas decimais era truncado pelo MySQL de forma inconsistente com o total
-// calculado em Go.
-func arredondarCentimos(v float64) float64 {
-	return float64(int64(v*100+0.5)) / 100
+	// Mantém as colunas decimal antigas alinhadas, para permitir rollback do binário.
+	item.SincronizarLegado()
 }
 
 // iniciaisDe devolve até duas iniciais do nome, usadas como logótipo de recurso quando o
@@ -174,6 +249,16 @@ func (h *Handler) CreateMenuItem(c *gin.Context) {
 	var in menuItemInput
 	if err := c.ShouldBindJSON(&in); err != nil {
 		erroCliente(c, http.StatusBadRequest, "Dados do produto inválidos")
+		return
+	}
+
+	t, err := h.tenantDoContexto(c)
+	if err != nil {
+		erroCliente(c, http.StatusNotFound, "Restaurante não encontrado")
+		return
+	}
+	if err := in.resolverValores(t.TaxaIVAOmissaoBP); err != nil {
+		erroCliente(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := in.validar(); err != nil {
@@ -217,6 +302,14 @@ func (h *Handler) UpdateMenuItem(c *gin.Context) {
 	var in menuItemInput
 	if err := c.ShouldBindJSON(&in); err != nil {
 		erroCliente(c, http.StatusBadRequest, "Dados do produto inválidos")
+		return
+	}
+
+	// A taxa por omissão só se aplica quando o cliente não indica nenhuma; manter a taxa
+	// actual do produto seria mais surpreendente do que usar a do restaurante.
+	taxaOmissao := item.TaxaIVABP
+	if err := in.resolverValores(taxaOmissao); err != nil {
+		erroCliente(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := in.validar(); err != nil {

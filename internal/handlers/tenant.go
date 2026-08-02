@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"cardapio-online/internal/auth"
+	"cardapio-online/internal/dinheiro"
 	"cardapio-online/internal/middleware"
 	"cardapio-online/internal/models"
 	"cardapio-online/internal/validate"
@@ -42,8 +43,12 @@ func (h *Handler) GetConfig(c *gin.Context) {
 		"domain_verified_at": t.DomainVerifiedAt,
 		"dinheiro_ativo":     t.DinheiroAtivo,
 		"cartao_ativo":       t.CartaoDebitoAtivo,
-		"main_domain":        h.Cfg.MainDomain,
-		"storefront_url":     fmt.Sprintf("https://%s.%s/menu", t.Slug, h.Cfg.MainDomain),
+
+		// Taxa de IVA sugerida ao criar produtos novos. A escolha final é por produto.
+		"taxa_iva_omissao_bp":    t.TaxaIVAOmissaoBP,
+		"taxa_iva_omissao_texto": t.TaxaIVAOmissaoBP.Percentagem(),
+		"main_domain":            h.Cfg.MainDomain,
+		"storefront_url":         fmt.Sprintf("https://%s.%s/menu", t.Slug, h.Cfg.MainDomain),
 
 		// Identidade visual
 		"logo_url":                 t.LogoURL,
@@ -61,6 +66,9 @@ type updateConfigInput struct {
 	// que representa o terminal de pagamento físico.
 	DinheiroAtivo *bool `json:"dinheiro_ativo"`
 	CartaoAtivo   *bool `json:"cartao_ativo"`
+
+	// TaxaIVAOmissaoBP é a taxa sugerida para produtos novos, em pontos base.
+	TaxaIVAOmissaoBP *int32 `json:"taxa_iva_omissao_bp"`
 
 	// Identidade visual do restaurante.
 	LogoURL                *string `json:"logo_url"`
@@ -116,6 +124,14 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 	if in.CartaoAtivo != nil {
 		campos["cartao_debito_ativo"] = *in.CartaoAtivo
 	}
+	if in.TaxaIVAOmissaoBP != nil {
+		taxa := dinheiro.TaxaBP(*in.TaxaIVAOmissaoBP)
+		if !taxa.Valida() {
+			erroCliente(c, http.StatusBadRequest, "Taxa de IVA inválida")
+			return
+		}
+		campos["taxa_iva_omissao_bp"] = taxa
+	}
 
 	// --- Identidade visual ---
 	if in.LogoURL != nil {
@@ -156,15 +172,18 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 
 	// Desactivar ambos os métodos deixaria o restaurante a receber encomendas que não
 	// consegue cobrar.
-	dinheiro := t.DinheiroAtivo
+	//
+	// Nomes com sufixo "Aceito" de propósito: uma variável chamada "dinheiro" sombrearia
+	// o pacote dinheiro, que é usado nesta função.
+	dinheiroAceito := t.DinheiroAtivo
 	if in.DinheiroAtivo != nil {
-		dinheiro = *in.DinheiroAtivo
+		dinheiroAceito = *in.DinheiroAtivo
 	}
-	cartao := t.CartaoDebitoAtivo
+	cartaoAceito := t.CartaoDebitoAtivo
 	if in.CartaoAtivo != nil {
-		cartao = *in.CartaoAtivo
+		cartaoAceito = *in.CartaoAtivo
 	}
-	if !dinheiro && !cartao {
+	if !dinheiroAceito && !cartaoAceito {
 		erroCliente(c, http.StatusBadRequest,
 			"Mantenha pelo menos um método de pagamento activo, ou não poderá cobrar as encomendas")
 		return

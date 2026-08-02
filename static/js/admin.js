@@ -21,6 +21,8 @@ let menuItems = [];
 let orders = [];
 let users = [];
 let editingItemId = null;
+// Taxa de IVA sugerida pelo restaurante para produtos novos, em pontos base.
+let taxaIVAOmissao = 1300;
 let timerPedidos = null;
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -154,14 +156,15 @@ async function loadOrders() {
 }
 
 function renderMetrics() {
-  const vendas = orders
+  // Soma em cêntimos: inteiros, exacta.
+  const vendasCents = orders
     .filter((o) => o.status === 'finalizado')
-    .reduce((soma, o) => soma + Number(o.valor_total || 0), 0);
+    .reduce((soma, o) => soma + Number(o.valor_total_cents || 0), 0);
   const activas = orders.filter(
     (o) => o.status !== 'finalizado' && o.status !== 'cancelado'
   ).length;
 
-  document.getElementById('metric-sales').innerText = formatCurrency(vendas);
+  document.getElementById('metric-sales').innerText = formatCents(vendasCents);
   document.getElementById('metric-orders').innerText = activas;
   document.getElementById('metric-total-orders').innerText = orders.length;
 }
@@ -206,7 +209,7 @@ function renderOrdersBoard() {
         (i) => `
       <div class="order-item-row">
         <span>${esc(i.quantidade)}x ${esc(i.nome)}</span>
-        <span>${esc(formatCurrency(Number(i.preco_unitario) * Number(i.quantidade)))}</span>
+        <span>${esc(formatCents(i.total_linha_cents ?? i.preco_unitario_cents * i.quantidade))}</span>
       </div>`
       )
       .join('');
@@ -230,7 +233,7 @@ function renderOrdersBoard() {
       </div>
       <div class="order-items">${linhasItens}</div>
       <div class="order-footer">
-        <span class="order-price">${esc(formatCurrency(order.valor_total))}</span>
+        <span class="order-price">${esc(formatCents(order.valor_total_cents))}</span>
         <span class="order-payment">${esc(etiquetaPagamento)}</span>
       </div>
       ${badgeCancelado}
@@ -329,11 +332,11 @@ function renderMenuGrid() {
 
   container.innerHTML = menuItems
     .map((item) => {
-      const temDesconto = item.desconto_ativo && Number(item.preco_desconto) > 0;
+      const temDesconto = item.desconto_ativo && Number(item.preco_desconto_cents) > 0;
       const precos = temDesconto
-        ? `<span class="price-original slashed">${esc(formatCurrency(item.preco))}</span>
-           <span class="price-discounted">${esc(formatCurrency(item.preco_desconto))}</span>`
-        : `<span class="price-original">${esc(formatCurrency(item.preco))}</span>`;
+        ? `<span class="price-original slashed">${esc(formatCents(item.preco_cents))}</span>
+           <span class="price-discounted">${esc(formatCents(item.preco_desconto_cents))}</span>`
+        : `<span class="price-original">${esc(formatCents(item.preco_cents))}</span>`;
 
       const badge = item.disponivel
         ? '<div class="menu-item-badge" style="background:var(--success)">ACTIVO</div>'
@@ -377,9 +380,11 @@ function openItemModal(id = null) {
     if (item) {
       document.getElementById('item-nome').value = item.nome;
       document.getElementById('item-categoria').value = item.categoria;
-      document.getElementById('item-preco').value = item.preco;
+      document.getElementById('item-preco').value = (item.preco_cents / 100).toFixed(2);
       document.getElementById('item-desconto-checkbox').checked = item.desconto_ativo;
-      document.getElementById('item-preco-desconto').value = item.preco_desconto || '';
+      document.getElementById('item-preco-desconto').value =
+        item.preco_desconto_cents ? (item.preco_desconto_cents / 100).toFixed(2) : '';
+      definirValor('item-taxa-iva', String(item.taxa_iva_bp ?? 1300));
       document.getElementById('item-descricao').value = item.descricao || '';
       document.getElementById('item-imagem-url').value = item.imagem_url || '';
       mostrarPreview(document.getElementById('preview-item-imagem'), item.imagem_url || '');
@@ -389,12 +394,15 @@ function openItemModal(id = null) {
   } else {
     document.getElementById('modal-action-title').innerText = 'Adicionar produto';
     document.getElementById('item-form').reset();
+    // Produto novo herda a taxa sugerida do restaurante, que o lojista pode alterar.
+    definirValor('item-taxa-iva', String(taxaIVAOmissao));
     document.getElementById('item-imagem-url').value = '';
     mostrarPreview(document.getElementById('preview-item-imagem'), '');
     document.getElementById('item-disponivel').checked = true;
     toggleDiscountInput(document.getElementById('item-desconto-checkbox'));
   }
 
+  actualizarDetalheIVA();
   overlay.classList.add('open');
 }
 
@@ -428,9 +436,14 @@ async function handleSaveItem(e) {
   const payload = {
     nome: document.getElementById('item-nome').value.trim(),
     categoria: document.getElementById('item-categoria').value.trim(),
-    preco,
+    // Enviado como texto: o servidor converte directamente para cêntimos, sem passar
+    // por float em nenhum ponto.
+    preco_texto: document.getElementById('item-preco').value.trim(),
+    preco_desconto_texto: descontoAtivo
+      ? document.getElementById('item-preco-desconto').value.trim()
+      : '',
+    taxa_iva_bp: Number(valorDe('item-taxa-iva')) || 0,
     desconto_ativo: descontoAtivo,
-    preco_desconto: descontoAtivo ? precoDesconto : 0,
     descricao: document.getElementById('item-descricao').value.trim(),
     imagem_url: document.getElementById('item-imagem-url').value.trim(),
     disponivel: document.getElementById('item-disponivel').checked,
@@ -458,6 +471,34 @@ async function deleteMenuItem(id) {
   } catch (err) {
     showToast(err.message, 'error');
   }
+}
+
+// actualizarDetalheIVA mostra a decomposição do preço introduzido.
+//
+// O lojista escreve o preço final, que é o que a lei manda afixar. Mostrar aqui quanto
+// desse valor é imposto evita a dúvida mais comum: "o preço que escrevi já inclui IVA?".
+function actualizarDetalheIVA() {
+  const alvo = document.getElementById('item-iva-detalhe');
+  if (!alvo) return;
+
+  const descontoAtivo = document.getElementById('item-desconto-checkbox')?.checked;
+  const campoPreco = descontoAtivo ? 'item-preco-desconto' : 'item-preco';
+  const cents = parseValor(valorDe(campoPreco));
+  const taxa = Number(valorDe('item-taxa-iva')) || 0;
+
+  if (cents === null || cents <= 0) {
+    alvo.innerHTML = 'Indique um preço para ver a decomposição.';
+    return;
+  }
+
+  const iva = ivaIncluido(cents, taxa);
+  const base = cents - iva;
+  const etiquetaTaxa = taxa > 0 ? `${(taxa / 100).toString().replace('.', ',')}%` : 'isento';
+
+  alvo.innerHTML = `
+    <strong>${esc(formatCents(cents))}</strong> é o que o cliente paga${descontoAtivo ? ' (preço com desconto)' : ''}.<br>
+    Base sem IVA: ${esc(formatCents(base))} &nbsp;·&nbsp; IVA (${esc(etiquetaTaxa)}): ${esc(formatCents(iva))}
+  `;
 }
 
 // --- Métodos de pagamento ---
@@ -515,6 +556,8 @@ async function loadGeneralConfig() {
 
     definirValor('config-rest-nome', config.nome || '');
     definirValor('config-rest-nif', config.nif || '');
+    taxaIVAOmissao = config.taxa_iva_omissao_bp ?? 1300;
+    definirValor('config-taxa-iva-omissao', String(taxaIVAOmissao));
     definirValor('config-rest-domain', config.domain || '');
 
     // Identidade visual
@@ -587,6 +630,7 @@ async function handleSaveGeneralConfig(e) {
     payload.cor_primaria = valorDe('config-cor-primaria-hex');
     payload.descricao_curta = valorDe('config-descricao-curta');
     payload.mostrar_marca_plataforma = lerCheck('config-mostrar-marca');
+    payload.taxa_iva_omissao_bp = Number(valorDe('config-taxa-iva-omissao')) || 0;
 
     await api('/api/admin/config', { metodo: 'PUT', corpo: payload });
     showToast('Configurações guardadas.', 'success');
@@ -994,7 +1038,13 @@ function setupEventListeners() {
   ligar('btn-add-item', 'click', () => openItemModal());
   ligar('modal-close-btn', 'click', closeItemModal);
   ligar('item-form', 'submit', handleSaveItem);
-  ligar('item-desconto-checkbox', 'change', (e) => toggleDiscountInput(e.target));
+  ligar('item-desconto-checkbox', 'change', (e) => {
+    toggleDiscountInput(e.target);
+    actualizarDetalheIVA();
+  });
+  ligar('item-preco', 'input', actualizarDetalheIVA);
+  ligar('item-preco-desconto', 'input', actualizarDetalheIVA);
+  ligar('item-taxa-iva', 'change', actualizarDetalheIVA);
 
   ligar('payments-form', 'submit', handleSavePayments);
   ligar('btn-refresh-orders', 'click', loadOrders);

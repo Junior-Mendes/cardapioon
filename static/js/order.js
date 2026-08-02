@@ -92,8 +92,8 @@ function renderOrderDetails(order) {
   };
 
   let paymentText = ETIQUETAS[order.forma_pagamento] || order.forma_pagamento;
-  if (Number(order.troco_para) > 0) {
-    paymentText += ` — vai pagar com ${formatCurrency(order.troco_para)}`;
+  if (Number(order.troco_para_cents) > 0) {
+    paymentText += ` — vai pagar com ${formatCents(order.troco_para_cents)}`;
   }
   document.getElementById('track-payment').innerText = paymentText;
 
@@ -105,12 +105,16 @@ function renderOrderDetails(order) {
         <strong>${esc(item.quantidade)}x</strong> ${esc(item.nome)}
       </div>
       <div>
-        ${esc(formatCurrency(item.preco_unitario * item.quantidade))}
+        ${esc(formatCents(item.total_linha_cents))}
       </div>
     </div>
   `).join('');
 
-  document.getElementById('track-total').innerText = formatCurrency(order.valor_total);
+  document.getElementById('track-total').innerText = formatCents(order.valor_total_cents);
+
+  // Decomposição de IVA: o cliente vê exactamente quanto do total é imposto, e o balcão
+  // tem o detalhe por taxa para reconciliar com o software de facturação.
+  mostrarDecomposicaoIVA(order);
 
   // O botão de voltar precisa do slug, que só chega com a encomenda.
   const btnVoltar = document.getElementById('btn-back-menu');
@@ -120,6 +124,38 @@ function renderOrderDetails(order) {
       window.location.href = `/menu?tenant=${encodeURIComponent(order.restaurante_slug)}`;
     });
   }
+}
+
+// mostrarDecomposicaoIVA apresenta o detalhe por taxa, tal como aparece num talão.
+function mostrarDecomposicaoIVA(order) {
+  const alvo = document.getElementById('track-iva');
+  if (!alvo) return;
+
+  const linhas = order.linhas_iva || [];
+  if (linhas.length === 0) {
+    alvo.innerHTML = '';
+    return;
+  }
+
+  const filas = linhas.map((l) => `
+    <div style="display:flex; justify-content:space-between; font-size:0.85rem;">
+      <span>Base a ${esc(l.taxa_iva_texto)}</span><span>${esc(l.base_texto)}</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; font-size:0.85rem;">
+      <span>IVA ${esc(l.taxa_iva_texto)}</span><span>${esc(l.iva_texto)}</span>
+    </div>`).join('');
+
+  alvo.innerHTML = `
+    <div style="border-top:1px solid var(--border-color); padding-top:0.75rem; margin-top:0.75rem;">
+      ${filas}
+      <div style="display:flex; justify-content:space-between; font-weight:600; margin-top:0.4rem;">
+        <span>Total de IVA</span><span>${esc(formatCents(order.iva_cents))}</span>
+      </div>
+      <p style="font-size:0.78rem; color:var(--text-muted); margin-top:0.6rem;">
+        ${esc(order.nota_iva || 'Valores com IVA incluído')}
+      </p>
+    </div>
+  `;
 }
 
 // Atualiza o gráfico do progresso do pedido e o texto explicativo

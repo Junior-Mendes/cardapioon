@@ -27,6 +27,7 @@ import (
 	"cardapio-online/internal/auth"
 	"cardapio-online/internal/config"
 	"cardapio-online/internal/db"
+	"cardapio-online/internal/dinheiro"
 	"cardapio-online/internal/handlers"
 	"cardapio-online/internal/mail"
 	"cardapio-online/internal/middleware"
@@ -160,7 +161,7 @@ func limparBase(t *testing.T, gdb *gorm.DB) {
 	// Ordem inversa das dependências.
 	tabelas := []string{
 		"audit_logs", "refresh_tokens", "password_resets",
-		"itens_pedido", "pedidos", "menu_items", "usuarios", "tenants",
+		"pedido_iva", "itens_pedido", "pedidos", "menu_items", "usuarios", "tenants",
 		"schema_migrations",
 	}
 	gdb.Exec("SET FOREIGN_KEY_CHECKS = 0")
@@ -197,9 +198,11 @@ func (a *ambiente) semear(t *testing.T, gdb *gorm.DB) {
 		}
 
 		item := models.MenuItem{
-			TenantID: tenant.ID, Nome: "Prato de " + nome, Preco: 10,
+			TenantID: tenant.ID, Nome: "Prato de " + nome,
+			PrecoCents: 1000, TaxaIVABP: dinheiro.TaxaIntermedia,
 			Categoria: "Pratos", Disponivel: true,
 		}
+		item.SincronizarLegado()
 		if err := gdb.Create(&item).Error; err != nil {
 			t.Fatalf("criar item %s: %v", slug, err)
 		}
@@ -207,9 +210,10 @@ func (a *ambiente) semear(t *testing.T, gdb *gorm.DB) {
 		pedido := models.Pedido{
 			TenantID: tenant.ID, PublicToken: uuid.NewString(),
 			ClienteNome: "Cliente de " + nome, ClienteTelefone: "+351912345678",
-			Status: models.StatusPendente, ValorTotal: 10,
+			Status: models.StatusPendente, ValorTotalCents: 1000,
 			FormaPagamento: "dinheiro", CreatedAt: agora, UpdatedAt: agora,
 		}
+		pedido.SincronizarLegado()
 		if err := gdb.Create(&pedido).Error; err != nil {
 			t.Fatalf("criar pedido %s: %v", slug, err)
 		}
@@ -662,7 +666,10 @@ func TestStorefrontResolvePeloHost(t *testing.T) {
 		Restaurante struct {
 			Slug string `json:"slug"`
 		} `json:"restaurante"`
-		Itens []models.MenuItem `json:"itens"`
+		Itens []struct {
+			ID   uint   `json:"id"`
+			Nome string `json:"nome"`
+		} `json:"itens"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
@@ -670,10 +677,18 @@ func TestStorefrontResolvePeloHost(t *testing.T) {
 	if resp.Restaurante.Slug != amb.tenantB.Slug {
 		t.Errorf("storefront resolveu %q, esperado %q", resp.Restaurante.Slug, amb.tenantB.Slug)
 	}
-	for _, it := range resp.Itens {
-		if it.TenantID != amb.tenantB.ID {
-			t.Errorf("cardápio público mistura tenants: item do tenant %d", it.TenantID)
-		}
+
+	// O menu público deixou de expor tenant_id, o que é desejável: menos informação
+	// interna na resposta. A verificação passa a ser por identidade dos itens.
+	if len(resp.Itens) != 1 {
+		t.Fatalf("%d itens no menu público, esperado 1", len(resp.Itens))
+	}
+	if resp.Itens[0].ID != amb.itemB.ID {
+		t.Errorf("menu público devolveu o item %d, esperado %d (do tenant B)",
+			resp.Itens[0].ID, amb.itemB.ID)
+	}
+	if resp.Itens[0].ID == amb.itemA.ID {
+		t.Error("menu público de B devolveu o item de A")
 	}
 }
 
@@ -720,15 +735,197 @@ func TestPrecoVemDaBaseDeDados(t *testing.T) {
 
 	var resp struct {
 		Encomenda struct {
-			ValorTotal float64 `json:"valor_total"`
+			ValorTotalCents int64 `json:"valor_total_cents"`
+			BaseCents       int64 `json:"base_cents"`
+			IVACents        int64 `json:"iva_cents"`
 		} `json:"encomenda"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	// 2 x 10 = 20, independentemente do que o cliente enviou.
-	if resp.Encomenda.ValorTotal != 20 {
-		t.Errorf("valor total = %v, esperado 20", resp.Encomenda.ValorTotal)
+	// 2 x 10,00 € = 20,00 €, independentemente do que o cliente enviou.
+	if resp.Encomenda.ValorTotalCents != 2000 {
+		t.Errorf("valor total = %d cêntimos, esperado 2000", resp.Encomenda.ValorTotalCents)
+	}
+	// A decomposição tem de fechar exactamente com o total.
+	if resp.Encomenda.BaseCents+resp.Encomenda.IVACents != resp.Encomenda.ValorTotalCents {
+		t.Errorf("base %d + IVA %d != total %d",
+			resp.Encomenda.BaseCents, resp.Encomenda.IVACents, resp.Encomenda.ValorTotalCents)
+	}
+	// 20,00 € a 13%: IVA = 2000 × 13/113 = 230,08... -> 230
+	if resp.Encomenda.IVACents != 230 {
+		t.Errorf("IVA = %d cêntimos, esperado 230", resp.Encomenda.IVACents)
+	}
+}
+
+// TestTotalEDecomposicaoFechamComVariasTaxas é o teste central da conformidade: uma
+// encomenda com pratos a 13% e bebidas a 23% tem de fechar ao cêntimo.
+func TestTotalEDecomposicaoFechamComVariasTaxas(t *testing.T) {
+	amb := montarAmbiente(t)
+
+	// Bebida a 23%, com um preço escolhido para dar arredondamento não trivial.
+	bebida := models.MenuItem{
+		TenantID: amb.tenantA.ID, Nome: "Cerveja",
+		PrecoCents: 249, TaxaIVABP: dinheiro.TaxaNormal,
+		Categoria: "Bebidas", Disponivel: true,
+	}
+	bebida.SincronizarLegado()
+	if err := amb.gdb.Create(&bebida).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	corpo := fmt.Sprintf(`{
+		"cliente_nome":"Cliente",
+		"cliente_telefone":"912345678",
+		"forma_pagamento":"dinheiro",
+		"itens":[
+			{"menu_item_id":%d,"quantidade":3},
+			{"menu_item_id":%d,"quantidade":2}
+		]
+	}`, amb.itemA.ID, bebida.ID)
+
+	rec := amb.fazer(pedidoHTTP{
+		metodo: "POST", rota: "/api/pedidos", corpo: corpo,
+		host: amb.tenantA.Slug + "." + dominioTeste,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Encomenda struct {
+			PublicToken     string `json:"public_token"`
+			ValorTotalCents int64  `json:"valor_total_cents"`
+			BaseCents       int64  `json:"base_cents"`
+			IVACents        int64  `json:"iva_cents"`
+		} `json:"encomenda"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3 × 10,00 € (13%) + 2 × 2,49 € (23%) = 30,00 + 4,98 = 34,98 €
+	const totalEsperado int64 = 3498
+	if resp.Encomenda.ValorTotalCents != totalEsperado {
+		t.Errorf("total = %d, esperado %d", resp.Encomenda.ValorTotalCents, totalEsperado)
+	}
+	if resp.Encomenda.BaseCents+resp.Encomenda.IVACents != totalEsperado {
+		t.Errorf("base %d + IVA %d = %d, tem de ser %d",
+			resp.Encomenda.BaseCents, resp.Encomenda.IVACents,
+			resp.Encomenda.BaseCents+resp.Encomenda.IVACents, totalEsperado)
+	}
+
+	// IVA esperado, extraído por taxa: 3000×13/113 = 345,13 -> 345; 498×23/123 = 93,12 -> 93
+	if resp.Encomenda.IVACents != 345+93 {
+		t.Errorf("IVA = %d, esperado %d", resp.Encomenda.IVACents, 345+93)
+	}
+
+	// O rastreio público tem de devolver a mesma decomposição, linha a linha por taxa.
+	rec = amb.fazer(pedidoHTTP{metodo: "GET", rota: "/api/encomendas/" + resp.Encomenda.PublicToken})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rastreio: status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var rastreio struct {
+		ValorTotalCents int64 `json:"valor_total_cents"`
+		BaseCents       int64 `json:"base_cents"`
+		IVACents        int64 `json:"iva_cents"`
+		LinhasIVA       []struct {
+			TaxaBP     int32 `json:"taxa_iva_bp"`
+			BrutoCents int64 `json:"bruto_cents"`
+			BaseCents  int64 `json:"base_cents"`
+			IVACents   int64 `json:"iva_cents"`
+		} `json:"linhas_iva"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &rastreio); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(rastreio.LinhasIVA) != 2 {
+		t.Fatalf("%d linhas de IVA, esperado 2", len(rastreio.LinhasIVA))
+	}
+
+	var somaBruto, somaBase, somaIVA int64
+	for _, l := range rastreio.LinhasIVA {
+		if l.BaseCents+l.IVACents != l.BrutoCents {
+			t.Errorf("linha %d bp não fecha: %d + %d != %d",
+				l.TaxaBP, l.BaseCents, l.IVACents, l.BrutoCents)
+		}
+		somaBruto += l.BrutoCents
+		somaBase += l.BaseCents
+		somaIVA += l.IVACents
+	}
+	if somaBruto != totalEsperado {
+		t.Errorf("soma das linhas = %d, esperado %d", somaBruto, totalEsperado)
+	}
+	if somaBase+somaIVA != totalEsperado {
+		t.Errorf("decomposição do rastreio não fecha: %d + %d != %d", somaBase, somaIVA, totalEsperado)
+	}
+	// A ordem é descendente por taxa, como num talão.
+	if rastreio.LinhasIVA[0].TaxaBP != 2300 {
+		t.Errorf("primeira linha é %d bp, esperado 2300", rastreio.LinhasIVA[0].TaxaBP)
+	}
+}
+
+// TestTaxaDoProdutoEhEscolhaDoEstabelecimento verifica que a taxa é aceita e guardada.
+func TestTaxaDoProdutoEhEscolhaDoEstabelecimento(t *testing.T) {
+	amb := montarAmbiente(t)
+	token := amb.tokenDe(amb.userA)
+
+	// Criar com 23% explicitamente.
+	rec := amb.fazer(pedidoHTTP{
+		metodo: "POST", rota: "/api/admin/cardapio",
+		corpo: `{"nome":"Vinho da casa","preco_texto":"4,50","categoria":"Bebidas","taxa_iva_bp":2300}`,
+		token: token,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var criado models.MenuItem
+	if err := json.Unmarshal(rec.Body.Bytes(), &criado); err != nil {
+		t.Fatal(err)
+	}
+	if criado.TaxaIVABP != 2300 {
+		t.Errorf("taxa = %d, esperado 2300", criado.TaxaIVABP)
+	}
+	if criado.PrecoCents != 450 {
+		t.Errorf("preço = %d cêntimos, esperado 450", criado.PrecoCents)
+	}
+
+	// Sem taxa indicada, usa a do restaurante.
+	rec = amb.fazer(pedidoHTTP{
+		metodo: "POST", rota: "/api/admin/cardapio",
+		corpo: `{"nome":"Sopa","preco_texto":"2,80","categoria":"Sopas"}`,
+		token: token,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &criado); err != nil {
+		t.Fatal(err)
+	}
+	if criado.TaxaIVABP != 1300 {
+		t.Errorf("taxa por omissão = %d, esperado 1300", criado.TaxaIVABP)
+	}
+
+	// Taxa inválida é recusada.
+	rec = amb.fazer(pedidoHTTP{
+		metodo: "POST", rota: "/api/admin/cardapio",
+		corpo: `{"nome":"X","preco_texto":"1,00","categoria":"Y","taxa_iva_bp":99999}`,
+		token: token,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("taxa inválida aceite: status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Preço com três casas decimais é recusado em vez de truncado.
+	rec = amb.fazer(pedidoHTTP{
+		metodo: "POST", rota: "/api/admin/cardapio",
+		corpo: `{"nome":"X","preco_texto":"1,005","categoria":"Y"}`,
+		token: token,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("preço com 3 decimais aceite: status %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

@@ -51,6 +51,46 @@ function formatCurrency(valor) {
   return FORMATADOR_MOEDA.format(Number.isFinite(n) ? n : 0);
 }
 
+/**
+ * formatCents formata um valor em cêntimos: 1250 -> "12,50 €".
+ * Preferir sempre a esta função em vez de formatCurrency com euros em float.
+ */
+function formatCents(cents) {
+  const n = Number(cents) || 0;
+  return FORMATADOR_MOEDA.format(n / 100);
+}
+
+/**
+ * ivaIncluido extrai o IVA contido num valor que já inclui imposto.
+ *
+ * Espelha exactamente a função do servidor, incluindo o arredondamento meio-para-cima em
+ * aritmética inteira. Serve apenas para pré-visualização no painel: o valor que conta é
+ * sempre o que o servidor calcula.
+ *
+ * @param {number} brutoCents  valor com IVA incluído, em cêntimos
+ * @param {number} taxaBP      taxa em pontos base (2300 = 23%)
+ */
+function ivaIncluido(brutoCents, taxaBP) {
+  const bruto = Math.abs(Math.round(Number(brutoCents) || 0));
+  const taxa = Math.round(Number(taxaBP) || 0);
+  if (taxa <= 0 || bruto === 0) return 0;
+
+  const denominador = 10000 + taxa;
+  return Math.floor((bruto * taxa + Math.floor(denominador / 2)) / denominador);
+}
+
+/** parseValor converte "12,50" ou "12.5" em cêntimos, ou devolve null se inválido. */
+function parseValor(texto) {
+  let s = String(texto ?? '').trim().replace(/€/g, '').replace(/\s/g, '');
+  if (s === '') return null;
+  s = s.replace(',', '.');
+  if (!/^\d*(\.\d{0,2})?$/.test(s)) return null;
+
+  const [inteiros = '0', decimais = ''] = s.split('.');
+  const dec = (decimais + '00').slice(0, 2);
+  return Number(inteiros || '0') * 100 + Number(dec);
+}
+
 const FORMATADOR_DATA = new Intl.DateTimeFormat('pt-PT', {
   day: '2-digit',
   month: '2-digit',

@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"cardapio-online/internal/dinheiro"
 	"cardapio-online/internal/middleware"
 	"cardapio-online/internal/models"
 	"cardapio-online/internal/validate"
@@ -41,11 +43,23 @@ type orderItemInput struct {
 }
 
 type createOrderInput struct {
-	ClienteNome     string           `json:"cliente_nome" binding:"required,min=2,max=150"`
-	ClienteTelefone string           `json:"cliente_telefone" binding:"required"`
-	FormaPagamento  string           `json:"forma_pagamento" binding:"required"`
-	TrocoPara       float64          `json:"troco_para" binding:"gte=0"`
-	Itens           []orderItemInput `json:"itens" binding:"required,min=1"`
+	ClienteNome     string `json:"cliente_nome" binding:"required,min=2,max=150"`
+	ClienteTelefone string `json:"cliente_telefone" binding:"required"`
+	FormaPagamento  string `json:"forma_pagamento" binding:"required"`
+
+	// Troco aceite como texto ou número, convertido para cêntimos sem passar por float
+	// nos cálculos.
+	TrocoParaTexto string           `json:"troco_para_texto"`
+	TrocoPara      float64          `json:"troco_para" binding:"gte=0"`
+	Itens          []orderItemInput `json:"itens" binding:"required,min=1"`
+}
+
+// trocoCents resolve o valor do troco a partir de qualquer das duas formas de entrada.
+func (in *createOrderInput) trocoCents() (dinheiro.Cents, error) {
+	if strings.TrimSpace(in.TrocoParaTexto) != "" {
+		return dinheiro.Parse(in.TrocoParaTexto)
+	}
+	return dinheiro.DeEuros(in.TrocoPara), nil
 }
 
 // CreateOrder cria uma encomenda.
@@ -108,6 +122,12 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		quantidades[item.MenuItemID] += item.Quantidade
 	}
 
+	troco, err := in.trocoCents()
+	if err != nil {
+		erroCliente(c, http.StatusBadRequest, "Valor de troco inválido")
+		return
+	}
+
 	agora := time.Now()
 	pedido := models.Pedido{
 		TenantID:        t.ID,
@@ -116,7 +136,7 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		ClienteTelefone: telefone,
 		Status:          models.StatusPendente,
 		FormaPagamento:  in.FormaPagamento,
-		TrocoPara:       arredondarCentimos(in.TrocoPara),
+		TrocoParaCents:  troco,
 		CreatedAt:       agora,
 		UpdatedAt:       agora,
 	}
@@ -125,8 +145,10 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 	}
 
 	err = h.DB.Transaction(func(tx *gorm.DB) error {
-		var total float64
+		var total dinheiro.Cents
 		var itens []models.OrderItem
+		// Valor bruto agrupado por taxa, para extrair o IVA de cada grupo no fim.
+		brutoPorTaxa := map[dinheiro.TaxaBP]dinheiro.Cents{}
 
 		for _, menuItemID := range ordem {
 			qtd := quantidades[menuItemID]
@@ -142,28 +164,63 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 				return err
 			}
 
-			preco := mi.Preco
-			if mi.DescontoAtivo && mi.PrecoDesconto > 0 && mi.PrecoDesconto < mi.Preco {
-				preco = mi.PrecoDesconto
-			}
+			preco := mi.PrecoEfetivoCents()
+			// Multiplicação inteira: exacta, sem acumular erro como acontecia com float64.
+			totalLinha := preco * dinheiro.Cents(qtd)
 
-			total += preco * float64(qtd)
-			itens = append(itens, models.OrderItem{
-				Nome:          mi.Nome,
-				Quantidade:    qtd,
-				PrecoUnitario: preco,
-				CreatedAt:     agora,
-			})
+			total += totalLinha
+			brutoPorTaxa[mi.TaxaIVABP] += totalLinha
+
+			item := models.OrderItem{
+				Nome:       mi.Nome,
+				Quantidade: qtd,
+				// Snapshot da taxa: o produto pode mudar de taxa depois desta encomenda.
+				TaxaIVABP:          mi.TaxaIVABP,
+				PrecoUnitarioCents: preco,
+				TotalLinhaCents:    totalLinha,
+				CreatedAt:          agora,
+			}
+			item.SincronizarLegado()
+			itens = append(itens, item)
 		}
 
-		pedido.ValorTotal = arredondarCentimos(total)
+		pedido.ValorTotalCents = total
+
+		// O IVA é extraído do total de cada taxa, não linha a linha: extrair por linha e
+		// somar acumularia até meio cêntimo por linha, e a decomposição deixaria de fechar
+		// com o que o cliente paga.
+		linhasIVA := dinheiro.ResumirIVA(brutoPorTaxa)
+		var somaBase, somaIVA dinheiro.Cents
+		registosIVA := make([]models.PedidoIVA, 0, len(linhasIVA))
+		for _, l := range linhasIVA {
+			somaBase += l.Base
+			somaIVA += l.IVA
+			registosIVA = append(registosIVA, models.PedidoIVA{
+				TaxaIVABP:  l.Taxa,
+				BrutoCents: l.Bruto,
+				BaseCents:  l.Base,
+				IVACents:   l.IVA,
+			})
+		}
+		pedido.BaseCents = somaBase
+		pedido.IVACents = somaIVA
+
+		// Invariante de conformidade: o que se mostra ao cliente é o total, e a
+		// decomposição nunca pode perder nem inventar um cêntimo. Se falhar, é um bug de
+		// cálculo e a encomenda não deve ser gravada.
+		if somaBase+somaIVA != total {
+			return fmt.Errorf("%w: base %d + IVA %d != total %d",
+				errDecomposicaoIVA, somaBase, somaIVA, total)
+		}
 
 		// O troco só é relevante para quem paga em dinheiro; um valor inferior ao total
 		// não faz sentido e seria uma surpresa no balcão.
 		if pedido.FormaPagamento == PagamentoBalcaoDinheiro &&
-			pedido.TrocoPara > 0 && pedido.TrocoPara < pedido.ValorTotal {
+			pedido.TrocoParaCents > 0 && pedido.TrocoParaCents < total {
 			return errTrocoInsuficiente
 		}
+
+		pedido.SincronizarLegado()
 
 		if err := tx.Create(&pedido).Error; err != nil {
 			return err
@@ -175,7 +232,16 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		if err := tx.Create(&itens).Error; err != nil {
 			return err
 		}
+		for i := range registosIVA {
+			registosIVA[i].PedidoID = pedido.ID
+		}
+		if len(registosIVA) > 0 {
+			if err := tx.Create(&registosIVA).Error; err != nil {
+				return err
+			}
+		}
 		pedido.Itens = itens
+		pedido.LinhasIVA = registosIVA
 		return nil
 	})
 
@@ -207,6 +273,7 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 var (
 	errItemIndisponivel  = errors.New("item indisponível")
 	errTrocoInsuficiente = errors.New("troco insuficiente")
+	errDecomposicaoIVA   = errors.New("decomposição de IVA não fecha com o total")
 )
 
 // validarMetodoPagamento confirma que o método está activo no restaurante.
@@ -236,9 +303,16 @@ func respostaEncomendaCriada(p *models.Pedido) gin.H {
 		"encomenda": gin.H{
 			"numero":       p.ID,
 			"public_token": p.PublicToken,
-			"valor_total":  p.ValorTotal,
 			"status":       p.Status,
 			"tracking_url": "/pedido?t=" + p.PublicToken,
+
+			// Valores em cêntimos, mais uma versão formatada para apresentação directa.
+			// A decomposição vai junta: é o "valor exato" que o cliente e o balcão veem.
+			"valor_total_cents": p.ValorTotalCents,
+			"valor_total_texto": p.ValorTotalCents.String(),
+			"base_cents":        p.BaseCents,
+			"iva_cents":         p.IVACents,
+			"iva_texto":         p.IVACents.String(),
 		},
 	}
 }
@@ -260,7 +334,8 @@ func (h *Handler) GetOrderPublico(c *gin.Context) {
 	}
 
 	var p models.Pedido
-	if err := h.DB.Preload("Itens").Where("public_token = ?", token).First(&p).Error; err != nil {
+	if err := h.DB.Preload("Itens").Preload("LinhasIVA").
+		Where("public_token = ?", token).First(&p).Error; err != nil {
 		erroCliente(c, http.StatusNotFound, "Encomenda não encontrada")
 		return
 	}
@@ -293,11 +368,19 @@ func (h *Handler) GetOrderPublico(c *gin.Context) {
 		// número completo fique exposto.
 		"cliente_telefone": p.TelefoneMascarado(),
 		"status":           p.Status,
-		"valor_total":      p.ValorTotal,
 		"forma_pagamento":  p.FormaPagamento,
-		"troco_para":       p.TrocoPara,
 		"created_at":       p.CreatedAt,
-		"itens":            p.Itens,
+
+		"valor_total_cents": p.ValorTotalCents,
+		"valor_total_texto": p.ValorTotalCents.String(),
+		"base_cents":        p.BaseCents,
+		"iva_cents":         p.IVACents,
+		"troco_para_cents":  p.TrocoParaCents,
+		"iva_incluido":      true,
+		"nota_iva":          "Valores com IVA incluído à taxa legal em vigor",
+
+		"itens":      itensPublicos(p.Itens),
+		"linhas_iva": linhasIVAPublicas(p.LinhasIVA),
 	})
 }
 
@@ -336,6 +419,7 @@ func (h *Handler) GetAdminOrders(c *gin.Context) {
 	var pedidos []models.Pedido
 	if err := consulta.
 		Preload("Itens").
+		Preload("LinhasIVA").
 		Order("id desc").
 		Limit(porPagina).
 		Offset((pagina - 1) * porPagina).
@@ -434,6 +518,55 @@ func (h *Handler) UpdateOrderStatus(c *gin.Context) {
 		"numero":  p.ID,
 		"status":  novo,
 	})
+}
+
+// itensPublicos formata as linhas da encomenda com os valores em cêntimos e a taxa que
+// lhes foi aplicada no momento da compra.
+func itensPublicos(itens []models.OrderItem) []gin.H {
+	out := make([]gin.H, 0, len(itens))
+	for i := range itens {
+		it := &itens[i]
+		out = append(out, gin.H{
+			"nome":                 it.Nome,
+			"quantidade":           it.Quantidade,
+			"preco_unitario_cents": it.PrecoUnitarioCents,
+			"preco_unitario_texto": it.PrecoUnitarioCents.String(),
+			"total_linha_cents":    it.TotalLinhaCents,
+			"total_linha_texto":    it.TotalLinhaCents.String(),
+			"taxa_iva_bp":          it.TaxaIVABP,
+			"taxa_iva_texto":       it.TaxaIVABP.Percentagem(),
+		})
+	}
+	return out
+}
+
+// linhasIVAPublicas devolve a decomposição por taxa, ordenada como num talão.
+//
+// A ordenação é explícita e não depende da ordem de inserção nem da ordem que o MySQL
+// devolve: sem isto, a mesma encomenda podia mostrar as taxas em ordens diferentes.
+func linhasIVAPublicas(linhas []models.PedidoIVA) []gin.H {
+	ordenadas := make([]models.PedidoIVA, len(linhas))
+	copy(ordenadas, linhas)
+	sort.Slice(ordenadas, func(i, j int) bool {
+		return ordenadas[i].TaxaIVABP > ordenadas[j].TaxaIVABP
+	})
+	linhas = ordenadas
+
+	out := make([]gin.H, 0, len(linhas))
+	for i := range linhas {
+		l := &linhas[i]
+		out = append(out, gin.H{
+			"taxa_iva_bp":    l.TaxaIVABP,
+			"taxa_iva_texto": l.TaxaIVABP.Percentagem(),
+			"bruto_cents":    l.BrutoCents,
+			"bruto_texto":    l.BrutoCents.String(),
+			"base_cents":     l.BaseCents,
+			"base_texto":     l.BaseCents.String(),
+			"iva_cents":      l.IVACents,
+			"iva_texto":      l.IVACents.String(),
+		})
+	}
+	return out
 }
 
 func atoiOmissao(s string, omissao int) int {

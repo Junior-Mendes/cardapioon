@@ -332,6 +332,19 @@
             </div>
 
             <div class="form-group" style="margin-top: 1.5rem;">
+              <label for="config-taxa-iva-omissao">Taxa de IVA sugerida para produtos novos</label>
+              <select id="config-taxa-iva-omissao" class="form-control">
+                <option value="1300">13% — taxa intermédia</option>
+                <option value="2300">23% — taxa normal</option>
+                <option value="600">6% — taxa reduzida</option>
+                <option value="0">Isento</option>
+              </select>
+              <span style="font-size:0.8rem; color:var(--text-muted); display:block; margin-top:0.35rem;">
+                Poupa-lhe escolher a taxa em cada produto. Pode sempre alterá-la produto a produto.
+              </span>
+            </div>
+
+            <div class="form-group" style="margin-top: 1.5rem;">
               <label for="config-rest-nif">NIF do estabelecimento</label>
               <input type="text" id="config-rest-nif" class="form-control" placeholder="Ex.: 501442600" inputmode="numeric" maxlength="11">
               <span style="font-size:0.8rem; color:var(--text-muted); display:block; margin-top:0.35rem;">
@@ -412,6 +425,23 @@
             </label>
           </div>
         </div>
+
+          <div class="form-group">
+            <label for="item-taxa-iva">Taxa de IVA</label>
+            <select id="item-taxa-iva" class="form-control">
+              <option value="1300">13% — taxa intermédia</option>
+              <option value="2300">23% — taxa normal</option>
+              <option value="600">6% — taxa reduzida</option>
+              <option value="0">Isento</option>
+            </select>
+            <div id="item-iva-detalhe" style="margin-top:0.6rem; padding:0.6rem 0.75rem; background:var(--bg-tertiary); border-radius:var(--radius-sm); font-size:0.82rem; color:var(--text-muted); line-height:1.6;">
+              <!-- Preenchido por admin.js -->
+            </div>
+            <span style="font-size:0.8rem; color:var(--text-muted); display:block; margin-top:0.35rem;">
+              O preço que indica acima é o preço final que o cliente paga, com IVA incluído.
+              A taxa aplicável a cada produto é uma decisão do seu contabilista.
+            </span>
+          </div>
 
         <div class="form-group" id="desconto-input-wrapper" style="display:none; border-left: 3px solid var(--success); padding-left: 1rem;">
           <label for="item-preco-desconto">Preço Promocional (R$)</label>

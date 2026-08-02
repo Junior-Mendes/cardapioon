@@ -147,15 +147,16 @@ function renderProducts() {
   }
 
   container.innerHTML = filtered.map(item => {
-    const hasDiscount = item.desconto_ativo && item.preco_desconto > 0;
+    const hasDiscount = item.desconto_ativo && item.preco_desconto_cents > 0;
 
+    // Todos os valores vêm em cêntimos do servidor; nada é recalculado aqui.
     const priceDisplay = hasDiscount
-      ? `<span class="prod-original-price slashed">${esc(formatCurrency(item.preco))}</span>
-         <span class="prod-discount-price">${esc(formatCurrency(item.preco_desconto))}</span>`
-      : `<span class="prod-original-price">${esc(formatCurrency(item.preco))}</span>`;
+      ? `<span class="prod-original-price slashed">${esc(formatCents(item.preco_cents))}</span>
+         <span class="prod-discount-price">${esc(formatCents(item.preco_desconto_cents))}</span>`
+      : `<span class="prod-original-price">${esc(formatCents(item.preco_cents))}</span>`;
 
     const discountBadge = hasDiscount
-      ? `<div class="discount-tag">-${Math.round((1 - item.preco_desconto / item.preco) * 100)}%</div>`
+      ? `<div class="discount-tag">-${Math.round((1 - item.preco_desconto_cents / item.preco_cents) * 100)}%</div>`
       : '';
 
     // escAttr remove parênteses: o URL entra num url(...) de CSS e sem isso poderia
@@ -198,12 +199,12 @@ function addToCart(id) {
   if (existing) {
     existing.qty++;
   } else {
-    const hasDiscount = item.desconto_ativo && item.preco_desconto > 0;
-    const price = hasDiscount ? item.preco_desconto : item.preco;
+    // O preço efectivo (com desconto, se activo) vem resolvido do servidor.
     cart.push({
       id: item.id,
       nome: item.nome,
-      preco: price,
+      precoCents: item.preco_efetivo_cents,
+      taxaBP: item.taxa_iva_bp,
       qty: 1
     });
   }
@@ -230,7 +231,8 @@ function updateCartUI() {
   const totalsContainer = document.getElementById('cart-totals');
   
   const totalItems = cart.reduce((sum, i) => sum + i.qty, 0);
-  const totalValue = cart.reduce((sum, i) => sum + (i.preco * i.qty), 0);
+  // Soma inteira em cêntimos: exacta, ao contrário da soma em euros com float.
+  const totalCents = cart.reduce((sum, i) => sum + i.precoCents * i.qty, 0);
 
   // Badge do carrinho flutuante
   document.getElementById('cart-count-badge').innerText = totalItems;
@@ -239,7 +241,7 @@ function updateCartUI() {
   const mobileBar = document.getElementById('mobile-cart-bar');
   if (totalItems > 0) {
     mobileBar.classList.add('active');
-    document.getElementById('mobile-total').innerText = formatCurrency(totalValue);
+    document.getElementById('mobile-total').innerText = formatCents(totalCents);
     document.getElementById('mobile-qty').innerText = `${totalItems} ${totalItems === 1 ? 'item' : 'itens'}`;
   } else {
     mobileBar.classList.remove('active');
@@ -264,7 +266,7 @@ function updateCartUI() {
     <div class="cart-item">
       <div class="cart-item-details">
         <div class="cart-item-name">${esc(item.nome)}</div>
-        <div class="cart-item-price">${esc(formatCurrency(item.preco))}</div>
+        <div class="cart-item-price">${esc(formatCents(item.precoCents))}</div>
       </div>
       <div class="cart-item-qty">
         <button class="qty-btn" data-qty="${esc(item.id)}" data-delta="-1">-</button>
@@ -280,8 +282,57 @@ function updateCartUI() {
     );
   });
 
-  document.getElementById('subtotal-val').innerText = formatCurrency(totalValue);
-  document.getElementById('total-val').innerText = formatCurrency(totalValue);
+  document.getElementById('subtotal-val').innerText = formatCents(totalCents);
+  document.getElementById('total-val').innerText = formatCents(totalCents);
+
+  // Nota de IVA e decomposição do carrinho.
+  mostrarIVACarrinho(totalCents);
+}
+
+// mostrarIVACarrinho apresenta a nota legal e o IVA contido no total.
+//
+// Em Portugal os preços afixados ao consumidor incluem imposto; o cliente paga o total
+// mostrado. A decomposição aparece porque foi pedida explicitamente, e é calculada por
+// taxa para que uma encomenda com pratos a 13% e bebidas a 23% feche ao cêntimo.
+function mostrarIVACarrinho(totalCents) {
+  const alvo = document.getElementById('cart-iva');
+  if (!alvo) return;
+
+  if (cart.length === 0) {
+    alvo.innerHTML = '';
+    return;
+  }
+
+  // Agrupa por taxa, como o servidor faz, e extrai o IVA de cada grupo.
+  const porTaxa = new Map();
+  cart.forEach((i) => {
+    const taxa = Number(i.taxaBP) || 0;
+    porTaxa.set(taxa, (porTaxa.get(taxa) || 0) + i.precoCents * i.qty);
+  });
+
+  const linhas = [...porTaxa.entries()]
+    .sort((a, b) => b[0] - a[0])
+    .map(([taxa, bruto]) => {
+      const iva = ivaIncluido(bruto, taxa);
+      const etiqueta = taxa > 0 ? `${(taxa / 100).toString().replace('.', ',')}%` : 'isento';
+      return `<div style="display:flex; justify-content:space-between;">
+        <span>IVA ${esc(etiqueta)}</span><span>${esc(formatCents(iva))}</span>
+      </div>`;
+    });
+
+  const ivaTotal = [...porTaxa.entries()].reduce(
+    (soma, [taxa, bruto]) => soma + ivaIncluido(bruto, taxa), 0
+  );
+
+  alvo.innerHTML = `
+    <div style="font-size:0.8rem; color:var(--text-muted); border-top:1px solid var(--border-color); padding-top:0.6rem; margin-top:0.6rem;">
+      ${linhas.join('')}
+      <div style="display:flex; justify-content:space-between; margin-top:0.25rem;">
+        <span>Total de IVA incluído</span><span>${esc(formatCents(ivaTotal))}</span>
+      </div>
+      <p style="margin-top:0.5rem;">${esc(menuData?.restaurante?.nota_iva || 'Preços com IVA incluído')}</p>
+    </div>
+  `;
 }
 
 // Controla o fluxo de Checkout
@@ -411,7 +462,7 @@ function renderPaymentOptions() {
 // o pagamento acontece fisicamente na caixa.
 function setupConfirmationScreen(metodo) {
   const container = document.getElementById('step-3-sim');
-  const total = cart.reduce((soma, i) => soma + i.preco * i.qty, 0);
+  const totalCents = cart.reduce((soma, i) => soma + i.precoCents * i.qty, 0);
 
   const blocoTroco =
     metodo === 'dinheiro'
@@ -442,7 +493,7 @@ function setupConfirmationScreen(metodo) {
       <h4 style="font-weight:700;">Confirmar encomenda</h4>
       <p style="font-size:0.9rem; color:var(--text-muted); margin:0.75rem 0;">
         Encomenda para <strong>levantamento ao balcão</strong>, no valor de
-        <strong>${esc(formatCurrency(total))}</strong>. ${comoPaga}
+        <strong>${esc(formatCents(totalCents))}</strong>. ${comoPaga}
       </p>
       <p style="font-size:0.85rem; color:var(--text-muted);">
         Vai receber um link para acompanhar a preparação. Levante quando estiver pronta.
@@ -477,7 +528,7 @@ async function submitOrderToServer() {
     return;
   }
 
-  const total = cart.reduce((soma, i) => soma + i.preco * i.qty, 0);
+  const totalCents = cart.reduce((soma, i) => soma + i.precoCents * i.qty, 0);
   let trocoPara = 0;
 
   if (escolhido.value === 'dinheiro') {
@@ -496,7 +547,7 @@ async function submitOrderToServer() {
     cliente_nome: document.getElementById('checkout-nome').value.trim(),
     cliente_telefone: document.getElementById('checkout-telefone').value.trim(),
     forma_pagamento: escolhido.value,
-    troco_para: trocoPara,
+    troco_para_texto: trocoTexto,
     itens: cart.map((i) => ({ menu_item_id: i.id, quantidade: i.qty })),
   };
 

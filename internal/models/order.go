@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"cardapio-online/internal/dinheiro"
+)
 
 type PedidoStatus string
 
@@ -39,29 +43,77 @@ type Pedido struct {
 	ClienteNome     string       `gorm:"type:varchar(150);not null" json:"cliente_nome"`
 	ClienteTelefone string       `gorm:"type:varchar(20);not null" json:"cliente_telefone"`
 	Status          PedidoStatus `gorm:"type:varchar(50);default:'pendente';index" json:"status"`
-	ValorTotal      float64      `gorm:"type:decimal(10,2);not null" json:"valor_total"`
-	FormaPagamento  string       `gorm:"type:varchar(50);not null" json:"forma_pagamento"`
-	TrocoPara       float64      `gorm:"type:decimal(10,2);default:0.00" json:"troco_para"`
+
+	// Valores em cêntimos. ValorTotalCents é o que o cliente paga; Base e IVA são a
+	// decomposição, guardada no momento da encomenda porque as taxas mudam por Orçamento
+	// do Estado e uma encomenda antiga tem de continuar a reproduzir o imposto que teve.
+	//
+	// Invariante garantida pelo cálculo: BaseCents + IVACents == ValorTotalCents.
+	ValorTotalCents dinheiro.Cents `gorm:"column:valor_total_cents;not null" json:"valor_total_cents"`
+	BaseCents       dinheiro.Cents `gorm:"column:base_cents;not null" json:"base_cents"`
+	IVACents        dinheiro.Cents `gorm:"column:iva_cents;not null" json:"iva_cents"`
+	TrocoParaCents  dinheiro.Cents `gorm:"column:troco_para_cents;not null" json:"troco_para_cents"`
+
+	// Colunas legadas, mantidas para permitir rollback do binário.
+	ValorTotal float64 `gorm:"type:decimal(10,2);not null" json:"-"`
+	TrocoPara  float64 `gorm:"type:decimal(10,2);default:0.00" json:"-"`
+
+	FormaPagamento string `gorm:"type:varchar(50);not null" json:"forma_pagamento"`
 	// PixPago é legado e deixa de ser escrito: o Pix não existe no mercado português e
-	// era marcado como pago sem qualquer verificação. Removido em migração da Fase 1.
+	// era marcado como pago sem qualquer verificação.
 	PixPago              bool        `gorm:"default:false" json:"-"`
 	CartaoUltimosDigitos string      `gorm:"type:varchar(4)" json:"cartao_ultimos_digitos"`
 	CreatedAt            time.Time   `gorm:"index" json:"created_at"`
 	UpdatedAt            time.Time   `json:"updated_at"`
 	Itens                []OrderItem `gorm:"foreignKey:PedidoID" json:"itens"`
+	// LinhasIVA é a decomposição por taxa, para o restaurante reconciliar com o software
+	// de facturação que já usa.
+	LinhasIVA []PedidoIVA `gorm:"foreignKey:PedidoID" json:"linhas_iva"`
 }
 
 type OrderItem struct {
-	ID            uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	PedidoID      uint      `gorm:"not null;index" json:"pedido_id"`
-	Nome          string    `gorm:"type:varchar(150);not null" json:"nome"`
-	Quantidade    int       `gorm:"not null" json:"quantidade"`
-	PrecoUnitario float64   `gorm:"type:decimal(10,2);not null" json:"preco_unitario"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	PedidoID uint   `gorm:"not null;index" json:"pedido_id"`
+	Nome     string `gorm:"type:varchar(150);not null" json:"nome"`
+
+	Quantidade int `gorm:"not null" json:"quantidade"`
+
+	// Preço unitário e total da linha em cêntimos, com IVA incluído.
+	PrecoUnitarioCents dinheiro.Cents `gorm:"column:preco_unitario_cents;not null" json:"preco_unitario_cents"`
+	TotalLinhaCents    dinheiro.Cents `gorm:"column:total_linha_cents;not null" json:"total_linha_cents"`
+	// TaxaIVABP é o snapshot da taxa aplicada. Não é lida do produto ao apresentar a
+	// encomenda: o produto pode ter mudado de taxa desde então.
+	TaxaIVABP dinheiro.TaxaBP `gorm:"column:taxa_iva_bp;not null" json:"taxa_iva_bp"`
+
+	// Coluna legada.
+	PrecoUnitario float64 `gorm:"type:decimal(10,2);not null" json:"-"`
+
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// PedidoIVA é o resumo de uma taxa de IVA numa encomenda.
+type PedidoIVA struct {
+	ID         uint            `gorm:"primaryKey;autoIncrement" json:"-"`
+	PedidoID   uint            `gorm:"not null;index" json:"-"`
+	TaxaIVABP  dinheiro.TaxaBP `gorm:"column:taxa_iva_bp;not null" json:"taxa_iva_bp"`
+	BrutoCents dinheiro.Cents  `gorm:"column:bruto_cents;not null" json:"bruto_cents"`
+	BaseCents  dinheiro.Cents  `gorm:"column:base_cents;not null" json:"base_cents"`
+	IVACents   dinheiro.Cents  `gorm:"column:iva_cents;not null" json:"iva_cents"`
 }
 
 func (Pedido) TableName() string    { return "pedidos" }
 func (OrderItem) TableName() string { return "itens_pedido" }
+func (PedidoIVA) TableName() string { return "pedido_iva" }
+
+// SincronizarLegado mantém as colunas decimal antigas alinhadas com os cêntimos.
+func (p *Pedido) SincronizarLegado() {
+	p.ValorTotal = p.ValorTotalCents.Euros()
+	p.TrocoPara = p.TrocoParaCents.Euros()
+}
+
+func (o *OrderItem) SincronizarLegado() {
+	o.PrecoUnitario = o.PrecoUnitarioCents.Euros()
+}
 
 // TelefoneMascarado devolve o telefone com os dígitos do meio ocultos.
 //

@@ -21,7 +21,9 @@ traefik_dynamic/*.yml
 vendor/
 
 # ---- Uploads de utilizadores ----
+# Imagens carregadas pelos lojistas: conteúdo de clientes, nunca versionado.
 static/uploads/
+uploads/
 
 # ---- Ambiente local ----
 .DS_Store

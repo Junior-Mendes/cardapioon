@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"cardapio-online/internal/dinheiro"
+)
 
 // Estados de verificação de um domínio personalizado.
 //
@@ -28,7 +32,13 @@ type Tenant struct {
 
 	// NIF do estabelecimento. Necessário para a facturação da subscrição e para os
 	// documentos que o restaurante emite.
-	NIF  string `gorm:"type:varchar(20)" json:"nif"`
+	NIF string `gorm:"type:varchar(20)" json:"nif"`
+
+	// TaxaIVAOmissaoBP é a taxa sugerida ao criar um produto novo, em pontos base.
+	// Poupa ao lojista escolher a taxa em cada produto quando a maioria tem a mesma.
+	// A escolha final é sempre por produto.
+	TaxaIVAOmissaoBP dinheiro.TaxaBP `gorm:"column:taxa_iva_omissao_bp;not null;default:1300" json:"taxa_iva_omissao_bp"`
+
 	Slug string `gorm:"type:varchar(50);uniqueIndex;not null" json:"slug"`
 
 	Domain            *string    `gorm:"type:varchar(255);uniqueIndex;default:null" json:"domain"`
