@@ -433,3 +433,110 @@ select.form-control optgroup {
     animation-duration: 2.4s;
   }
 }
+
+/* ===========================================================================
+   Correcções de telemóvel
+   ===========================================================================
+   NOTA sobre a abordagem: o CSS deste projecto é desktop-first — as media
+   queries existentes são todas `max-width`, com o estilo base pensado para
+   ecrã grande. Inverter tudo para `min-width` é um refactor de risco elevado
+   sem ganho funcional imediato, pelo que estas regras corrigem os defeitos
+   reais em telemóvel. Componentes novos são escritos mobile-first (ver
+   .seg-group, que empilha por omissão e cresce com o espaço).
+   =========================================================================== */
+
+/* --- 1. Zoom involuntário no iOS ---------------------------------------------
+   O Safari em iOS amplia a página quando um campo com font-size inferior a 16px
+   recebe foco, e não volta a reduzir. O utilizador fica com o layout deslocado a
+   meio do checkout. 16px é o limiar exacto. */
+@media (max-width: 900px) {
+  .form-control,
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="tel"],
+  input[type="url"],
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* --- 2. Modal mais alto que o ecrã -------------------------------------------
+   O checkout tem três passos e, com o campo de troco aberto, o cartão excedia a
+   altura do ecrã sem forma de rolar: o botão de finalizar ficava inalcançável.
+   Em ecrã pequeno passa a folha inferior, que é o padrão esperado no telemóvel. */
+.modal-card {
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  /* Momentum scroll no iOS. */
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 600px) {
+  .modal-overlay {
+    align-items: flex-end;
+  }
+
+  .modal-card {
+    max-width: 100%;
+    max-height: 92dvh;
+    padding: 1.25rem;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    /* Respeita o indicador de home do iPhone, que de outro modo fica sobre o
+       último botão. */
+    padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
+  }
+
+  .modal-title {
+    font-size: 1.15rem;
+  }
+}
+
+/* --- 3. Áreas de toque -------------------------------------------------------
+   O mínimo recomendado é 44x44px. Abaixo disso os erros de toque aumentam
+   visivelmente, sobretudo nos botões de quantidade, que estão lado a lado. */
+@media (pointer: coarse) {
+  .qty-btn,
+  .add-btn,
+  .modal-close,
+  .seg-option {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .btn {
+    min-height: 44px;
+  }
+}
+
+/* --- 4. Barras fixas e o indicador de home -----------------------------------
+   A barra de carrinho fixa ficava por baixo do indicador de home nos iPhones
+   recentes, o que tornava o botão de finalizar difícil de acertar. */
+.mobile-cart-bar {
+  padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+}
+
+/* --- 5. Sem transbordo horizontal --------------------------------------------
+   Uma única palavra longa num nome de produto, ou uma tabela de registos DNS,
+   empurrava a página para o lado e fazia todo o ecrã deslizar na horizontal. */
+html,
+body {
+  overflow-x: hidden;
+}
+
+.product-name,
+.product-desc,
+.cart-item-name,
+.order-client,
+.menu-item-name {
+  overflow-wrap: anywhere;
+}
+
+/* Conteúdo largo rola dentro do seu próprio contentor, não na página. */
+.tabela-rolavel {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}

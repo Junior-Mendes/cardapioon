@@ -588,3 +588,41 @@
   color: var(--text-muted);
   margin-top: 4px;
 }
+
+
+/* Banner do restaurante em telemóvel.
+   Com 4rem de padding superior consumia mais de um terço do ecrã antes de o
+   cliente ver um único prato, o que atrasa o que ele veio fazer. */
+@media (max-width: 600px) {
+  .restaurant-banner {
+    padding: 1.75rem 1.25rem 1.25rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .restaurant-name {
+    font-size: 1.4rem;
+  }
+
+  .menu-layout {
+    padding: 0.75rem;
+    /* Espaço para a barra de carrinho fixa, incluindo a área segura do iPhone. */
+    padding-bottom: calc(84px + env(safe-area-inset-bottom));
+  }
+
+  .categories-bar {
+    /* As categorias rolam na horizontal em vez de partirem para várias linhas. */
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .categories-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .category-tab {
+    white-space: nowrap;
+    flex: none;
+  }
+}

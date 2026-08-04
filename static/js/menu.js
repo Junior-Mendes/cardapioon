@@ -286,7 +286,7 @@ function updateCartUI() {
   document.getElementById('total-val').innerText = formatCents(totalCents);
 
   // Nota de IVA e decomposição do carrinho.
-  mostrarIVACarrinho(totalCents);
+  mostrarIVACarrinho();
 }
 
 // mostrarIVACarrinho apresenta a nota legal e o IVA contido no total.
@@ -294,7 +294,7 @@ function updateCartUI() {
 // Em Portugal os preços afixados ao consumidor incluem imposto; o cliente paga o total
 // mostrado. A decomposição aparece porque foi pedida explicitamente, e é calculada por
 // taxa para que uma encomenda com pratos a 13% e bebidas a 23% feche ao cêntimo.
-function mostrarIVACarrinho(totalCents) {
+function mostrarIVACarrinho() {
   const alvo = document.getElementById('cart-iva');
   if (!alvo) return;
 
@@ -529,13 +529,23 @@ async function submitOrderToServer() {
   }
 
   const totalCents = cart.reduce((soma, i) => soma + i.precoCents * i.qty, 0);
-  let trocoPara = 0;
+
+  // O troco é enviado como texto, para que o servidor o converta em cêntimos sem passar
+  // por vírgula flutuante.
+  let trocoTexto = '';
 
   if (escolhido.value === 'dinheiro') {
     const cb = document.getElementById('dinheiro-troco-checkbox');
     if (cb && cb.checked) {
-      trocoPara = parseFloat(document.getElementById('dinheiro-troco-val').value) || 0;
-      if (trocoPara > 0 && trocoPara < total) {
+      trocoTexto = document.getElementById('dinheiro-troco-val').value.trim();
+      const trocoCents = parseValor(trocoTexto);
+
+      if (trocoTexto !== '' && trocoCents === null) {
+        showToast('Indique um valor válido para o troco, por exemplo 20.', 'error');
+        restaurar();
+        return;
+      }
+      if (trocoCents !== null && trocoCents > 0 && trocoCents < totalCents) {
         showToast('O valor indicado é inferior ao total da encomenda.', 'error');
         restaurar();
         return;

@@ -16,7 +16,6 @@
 
 'use strict';
 
-let currentTab = 'pedidos';
 let menuItems = [];
 let orders = [];
 let users = [];
@@ -132,7 +131,6 @@ function loadDashboardData() {
 }
 
 function switchTab(tab) {
-  currentTab = tab;
 
   ['pedidos', 'cardapio', 'pagamentos', 'usuarios', 'configuracoes'].forEach((nome) => {
     const painel = document.getElementById(`tab-${nome}`);
@@ -680,13 +678,13 @@ async function handleSaveDomain() {
     wrapper.innerHTML = `
       <strong>Falta um passo: provar que o domínio é seu.</strong>
       <p style="margin:0.5rem 0;">Crie este registo no seu registrador de domínios:</p>
-      <table style="width:100%; font-size:0.85rem; margin-bottom:0.75rem;">
+      <table class="tabela-rolavel" style="width:100%; font-size:0.85rem; margin-bottom:0.75rem;">
         <tr><td style="padding:2px 8px 2px 0;">Tipo</td><td><code>${esc(dados.registo_txt.tipo)}</code></td></tr>
         <tr><td style="padding:2px 8px 2px 0;">Nome</td><td><code>${esc(dados.registo_txt.nome)}</code></td></tr>
         <tr><td style="padding:2px 8px 2px 0;">Valor</td><td><code>${esc(dados.registo_txt.valor)}</code></td></tr>
       </table>
       <p style="margin:0.5rem 0;">E este, para encaminhar o tráfego:</p>
-      <table style="width:100%; font-size:0.85rem;">
+      <table class="tabela-rolavel" style="width:100%; font-size:0.85rem;">
         <tr><td style="padding:2px 8px 2px 0;">Tipo</td><td><code>${esc(dados.registo_encaminhamento.tipo)}</code></td></tr>
         <tr><td style="padding:2px 8px 2px 0;">Nome</td><td><code>${esc(dados.registo_encaminhamento.nome)}</code></td></tr>
         <tr><td style="padding:2px 8px 2px 0;">Valor</td><td><code>${esc(dados.registo_encaminhamento.valor)}</code></td></tr>
