@@ -7,6 +7,7 @@ import (
 
 	"cardapio-online/internal/auth"
 	"cardapio-online/internal/config"
+	"cardapio-online/internal/eventos"
 	"cardapio-online/internal/mail"
 	"cardapio-online/internal/middleware"
 	"cardapio-online/internal/models"
@@ -28,6 +29,9 @@ type Deps struct {
 	Mailer   mail.Sender
 	Traefik  *traefik.Writer
 	Resolver *middleware.TenantResolver
+	// Eventos_ distribui acontecimentos em tempo real para os painéis abertos. O sufixo
+	// evita colisão com o método Eventos, que é o handler SSE.
+	Eventos_ *eventos.Broker
 }
 
 type Handler struct {

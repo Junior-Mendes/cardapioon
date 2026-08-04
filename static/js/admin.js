@@ -25,6 +25,8 @@ let taxaIVAOmissao = 1300;
 let timerPedidos = null;
 
 document.addEventListener('DOMContentLoaded', () => {
+  registarServiceWorker();
+  prepararInstalacao();
   checkAuth();
   setupEventListeners();
 });
@@ -47,6 +49,7 @@ function checkAuth() {
   document.getElementById('logged-user-name').innerText = Sessao.info().nome || 'Lojista';
 
   loadDashboardData();
+  iniciarTempoReal();
 
   // Registo acabado de fazer: abre as Configurações, onde o estado do endereço é
   // mostrado, em vez de deixar o lojista num quadro de encomendas vazio sem saber se
@@ -58,13 +61,111 @@ function checkAuth() {
     window.history.replaceState({}, '', '/admin');
   }
 
-  // Actualização periódica das encomendas.
+  // Sondagem de segurança, agora a cada dois minutos em vez de quinze segundos.
   //
-  // Continua a ser polling, mas agora sobre uma lista paginada em vez de todas as
-  // encomendas de sempre. A substituição por SSE está planeada para a Fase 2.
+  // O tempo real vem do stream de eventos; esta sondagem existe apenas para o caso de o
+  // stream cair sem que o cliente perceba, e para corrigir divergências. Sem ela, uma
+  // falha silenciosa do stream deixaria o painel congelado sem que ninguém notasse.
   if (!timerPedidos) {
-    timerPedidos = setInterval(loadOrders, 15000);
+    timerPedidos = setInterval(loadOrders, 120000);
   }
+}
+
+// --- Tempo real ---
+
+// pendentesConhecidos guarda o número de encomendas à espera, para o aviso do separador.
+let pendentesConhecidos = 0;
+
+// iniciarTempoReal liga o stream de eventos e o aviso sonoro.
+function iniciarTempoReal() {
+  Eventos.em('encomenda_nova', (ev) => {
+    const d = ev.dados || {};
+
+    // Toca e mostra o aviso antes de recarregar a lista: a informação essencial já vem no
+    // evento, e esperar pela lista atrasaria o som.
+    Som.tocar();
+    showToast(
+      `Nova encomenda #${d.numero} — ${d.valor_total_texto || ''}`.trim(),
+      'success'
+    );
+
+    loadOrders();
+  });
+
+  Eventos.em('encomenda_estado', () => {
+    // Outro posto ao balcão mudou o estado: alinhar sem esperar pela sondagem.
+    loadOrders();
+  });
+
+  Eventos.em('__estado', mostrarEstadoTempoReal);
+
+  Eventos.ligar();
+  actualizarBotaoSom();
+}
+
+function mostrarEstadoTempoReal(ligado) {
+  const el = document.getElementById('estado-tempo-real');
+  if (!el) return;
+
+  el.classList.toggle('ligado', ligado);
+  el.title = ligado
+    ? 'A receber encomendas em tempo real'
+    : 'Sem ligação em tempo real. A tentar reconectar; as encomendas continuam a ser recebidas.';
+  el.textContent = ligado ? 'Em direto' : 'A reconectar…';
+}
+
+// --- Som de aviso ---
+
+// activarSom tem de correr dentro de um gesto do utilizador: os browsers bloqueiam áudio
+// até haver interação, e sem isto o painel ficaria mudo sem o lojista saber.
+function activarSom() {
+  const pronto = Som.armar();
+  Som.definirPreferido(pronto);
+  actualizarBotaoSom();
+
+  if (pronto) {
+    // Toca uma vez para o lojista confirmar que ouve, e a que volume.
+    Som.tocar({ repeticoes: 1 });
+    showToast('Aviso sonoro activado.', 'success');
+  } else {
+    showToast('O navegador não permitiu activar o som nesta página.', 'error');
+  }
+}
+
+function desactivarSom() {
+  Som.definirPreferido(false);
+  actualizarBotaoSom();
+  showToast('Aviso sonoro desligado.', 'info');
+}
+
+// actualizarBotaoSom mantém o botão a dizer a verdade sobre o estado do som.
+//
+// Três estados distintos, e a distinção importa: desligado por escolha, ligado e a
+// funcionar, ou ligado na preferência mas ainda sem gesto — este último é o perigoso,
+// porque o lojista pensa que vai ser avisado.
+function actualizarBotaoSom() {
+  const btn = document.getElementById('btn-som');
+  if (!btn) return;
+
+  if (!Som.preferido()) {
+    btn.textContent = '🔇 Som desligado';
+    btn.classList.remove('som-activo', 'som-pendente');
+    return;
+  }
+  if (Som.armado) {
+    btn.textContent = '🔔 Som ligado';
+    btn.classList.add('som-activo');
+    btn.classList.remove('som-pendente');
+    return;
+  }
+  btn.textContent = '🔔 Toque para activar o som';
+  btn.classList.add('som-pendente');
+  btn.classList.remove('som-activo');
+}
+
+function alternarSom() {
+  if (Som.preferido() && Som.armado) desactivarSom();
+  else activarSom();
 }
 
 async function handleLogin(e) {
@@ -102,6 +203,8 @@ async function handleLogout() {
     }
   }
   pararVigilanciaStorefront();
+  Eventos.desligar();
+  Titulo.parar();
   Sessao.limpar();
   window.location.reload();
 }
@@ -176,6 +279,11 @@ function renderMetrics() {
   ).length;
 
   document.getElementById('metric-sales').innerText = formatCents(vendasCents);
+
+  // Aviso no separador do browser: o som pode não bastar numa cozinha com ruído, e o
+  // painel pode estar num separador de fundo.
+  pendentesConhecidos = orders.filter((o) => o.status === 'pendente').length;
+  Titulo.actualizar(pendentesConhecidos);
   document.getElementById('metric-orders').innerText = activas;
   document.getElementById('metric-total-orders').innerText = orders.length;
 }
@@ -1330,6 +1438,8 @@ function ligar(id, evento, handler) {
 function setupEventListeners() {
   ligar('login-form', 'submit', handleLogin);
   ligar('nav-logout-btn', 'click', handleLogout);
+  ligar('btn-som', 'click', alternarSom);
+  ligar('btn-instalar', 'click', instalarApp);
   ligar('link-esqueci-senha', 'click', (e) => {
     e.preventDefault();
     handleEsqueciSenha();

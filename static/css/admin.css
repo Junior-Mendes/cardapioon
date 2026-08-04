@@ -719,3 +719,81 @@ input:checked + .slider:before {
     padding-top: 0.5rem;
   }
 }
+
+/* ===========================================================================
+   Aviso de encomenda nova
+   ===========================================================================
+   O painel sondava em silêncio a cada quinze segundos: se ninguém olhasse para o
+   ecrã, a encomenda passava. */
+
+/* Estado da ligação em tempo real.
+   Visível de propósito: um painel que perdeu o stream continua a receber
+   encomendas mas deixa de avisar, e isso tem de ser evidente. */
+.estado-tempo-real {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.estado-tempo-real::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.estado-tempo-real.ligado {
+  color: var(--success);
+}
+
+.estado-tempo-real.ligado::before {
+  background: var(--success);
+  animation: pulsar-ponto 2s ease-in-out infinite;
+}
+
+@keyframes pulsar-ponto {
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .estado-tempo-real.ligado::before {
+    animation: none;
+  }
+}
+
+/* Botão do som.
+   O estado "pendente" — preferência ligada mas sem gesto do utilizador — é o
+   perigoso: o lojista pensa que vai ser avisado e o browser não deixa tocar. Por
+   isso pisca em cor de aviso até ser tocado. */
+.btn-som {
+  white-space: nowrap;
+}
+
+.btn-som.som-activo {
+  color: var(--success);
+  border-color: rgba(46, 213, 115, 0.4);
+}
+
+.btn-som.som-pendente {
+  color: var(--warning);
+  border-color: rgba(255, 165, 2, 0.5);
+  animation: chamar-atencao 2.5s ease-in-out infinite;
+}
+
+@keyframes chamar-atencao {
+  50% { border-color: rgba(255, 165, 2, 1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-som.som-pendente {
+    animation: none;
+  }
+}

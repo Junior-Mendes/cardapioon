@@ -28,6 +28,7 @@ import (
 	"cardapio-online/internal/config"
 	"cardapio-online/internal/db"
 	"cardapio-online/internal/dinheiro"
+	"cardapio-online/internal/eventos"
 	"cardapio-online/internal/handlers"
 	"cardapio-online/internal/mail"
 	"cardapio-online/internal/middleware"
@@ -99,6 +100,7 @@ func montarAmbiente(t *testing.T) *ambiente {
 	h := handlers.New(&handlers.Deps{
 		DB: gdb, Cfg: cfg, Tokens: tokens,
 		Mailer:   mail.LogSender{},
+		Eventos_: eventos.NewBroker(),
 		Traefik:  traefik.NewWriter(t.TempDir(), dominioTeste, "http://api:8081"),
 		Resolver: resolver,
 	})
@@ -131,6 +133,7 @@ func montarRotas(h *handlers.Handler, resolver *middleware.TenantResolver, token
 	{
 		admin.GET("/config", h.GetConfig)
 		admin.POST("/conta/alterar-senha", h.AlterarSenha)
+		admin.GET("/eventos", middleware.RequireRole(middleware.RoleFuncionario), h.Eventos)
 
 		gestao := admin.Group("", middleware.RequireRole(middleware.RoleAdmin))
 		gestao.PUT("/config", h.UpdateConfig)
@@ -1356,6 +1359,34 @@ func TestDestaquesVemDoHistorico(t *testing.T) {
 		if id == segundo.ID {
 			t.Error("produto indisponível aparece nos destaques")
 		}
+	}
+}
+
+// TestEventoDeEstadoTrazOAnterior: o registo de auditoria e o evento têm de indicar o
+// estado de onde a encomenda veio.
+//
+// Regressão: o GORM, com Updates(map), altera também o campo da struct em memória. Ler
+// p.Status depois da escrita devolvia o valor novo, e ficava gravado "preparando ->
+// preparando" — inútil para reconstruir o que aconteceu a uma encomenda.
+func TestEventoDeEstadoTrazOAnterior(t *testing.T) {
+	amb := montarAmbiente(t)
+
+	rec := amb.fazer(pedidoHTTP{
+		metodo: "PUT", rota: fmt.Sprintf("/api/admin/pedidos/%d/status", amb.pedidoA.ID),
+		corpo: `{"status":"preparando"}`, token: amb.tokenDe(amb.userA),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var registo models.AuditLog
+	if err := amb.gdb.Where("acao = ?", "encomenda_estado_alterado").
+		Order("id desc").First(&registo).Error; err != nil {
+		t.Fatalf("registo de auditoria não encontrado: %v", err)
+	}
+
+	if registo.Detalhe != "pendente -> preparando" {
+		t.Errorf("detalhe = %q, esperado \"pendente -> preparando\"", registo.Detalhe)
 	}
 }
 

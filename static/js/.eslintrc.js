@@ -26,6 +26,13 @@ const partilhados = {
   ErroAPI: 'readonly',
   // branding.js
   aplicarBranding: 'readonly',
+  // alertas.js
+  Som: 'readonly',
+  Titulo: 'readonly',
+  Eventos: 'readonly',
+  registarServiceWorker: 'readonly',
+  prepararInstalacao: 'readonly',
+  instalarApp: 'readonly',
 };
 
 module.exports = {
@@ -67,6 +74,18 @@ module.exports = {
       // declara globais. As suas funções parecem não usadas porque só são chamadas de
       // outros ficheiros; só as variáveis locais são verificadas.
       files: ['common.js'],
+      rules: {
+        'no-unused-vars': ['warn', { args: 'none', vars: 'local' }],
+      },
+    },
+    {
+      // alertas.js define Som, Titulo e Eventos, e consome Sessao e api de common.js.
+      files: ['alertas.js'],
+      globals: {
+        Sessao: 'readonly',
+        api: 'readonly',
+        showToast: 'readonly',
+      },
       rules: {
         'no-unused-vars': ['warn', { args: 'none', vars: 'local' }],
       },

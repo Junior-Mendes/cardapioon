@@ -13,6 +13,7 @@ import (
 	"cardapio-online/internal/auth"
 	"cardapio-online/internal/config"
 	"cardapio-online/internal/db"
+	"cardapio-online/internal/eventos"
 	"cardapio-online/internal/handlers"
 	"cardapio-online/internal/mail"
 	"cardapio-online/internal/middleware"
@@ -77,6 +78,7 @@ func executar() error {
 		}),
 		Traefik:  traefik.NewWriter(cfg.TraefikDynamicDir, cfg.MainDomain, cfg.BackendURL),
 		Resolver: resolver,
+		Eventos_: eventos.NewBroker(),
 	})
 
 	if err := h.SincronizarRotasTraefik(); err != nil {
@@ -180,6 +182,12 @@ func construirRouter(
 	r.StaticFile("/redefinir-senha", "./static/reset.html")
 	r.StaticFile("/privacidade", "./static/privacidade.html")
 
+	// PWA. O manifest e o service worker são servidos da raiz de propósito: um service
+	// worker só controla páginas dentro do seu próprio caminho, pelo que servido de
+	// /static/ não controlaria /admin.
+	r.StaticFile("/manifest.json", "./static/manifest.json")
+	r.StaticFile("/sw.js", "./static/sw.js")
+
 	// Raiz: landing page no domínio do SaaS, storefront nos domínios de clientes.
 	r.GET("/", func(c *gin.Context) {
 		if resolver.IsMainDomain(c.Request.Host) {
@@ -225,6 +233,8 @@ func construirRouter(
 		// Estado do endereço público, sondado pelo painel enquanto o Traefik publica a
 		// rota e o Let's Encrypt emite o certificado.
 		admin.GET("/storefront/status", h.StorefrontStatus)
+		// Stream de acontecimentos em tempo real. Substitui a sondagem do painel.
+		admin.GET("/eventos", middleware.RequireRole(middleware.RoleFuncionario), h.Eventos)
 		admin.POST("/conta/alterar-senha", h.AlterarSenha)
 
 		// Configuração do restaurante e domínio: apenas owner e admin.

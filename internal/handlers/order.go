@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"cardapio-online/internal/dinheiro"
+	"cardapio-online/internal/eventos"
 	"cardapio-online/internal/middleware"
 	"cardapio-online/internal/models"
 	"cardapio-online/internal/validate"
@@ -293,6 +294,17 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		return
 	}
 
+	// Notifica os painéis abertos. Depois da transacção: só se anuncia o que ficou
+	// gravado.
+	h.Eventos_.Publicar(t.ID, eventos.TipoEncomendaNova, gin.H{
+		"numero":            pedido.ID,
+		"cliente_nome":      pedido.ClienteNome,
+		"valor_total_cents": pedido.ValorTotalCents,
+		"valor_total_texto": pedido.ValorTotalCents.String(),
+		"itens":             len(pedido.Itens),
+		"forma_pagamento":   pedido.FormaPagamento,
+	})
+
 	c.JSON(http.StatusCreated, respostaEncomendaCriada(&pedido))
 }
 
@@ -528,6 +540,13 @@ func (h *Handler) UpdateOrderStatus(c *gin.Context) {
 		return
 	}
 
+	// O estado anterior é guardado ANTES da escrita.
+	//
+	// O GORM, com Updates(map), também altera o campo da struct em memória. Ler p.Status
+	// depois da escrita devolveria o valor novo, e tanto o registo de auditoria como o
+	// evento diriam "preparando -> preparando".
+	anterior := p.Status
+
 	if err := h.DB.Model(&p).Updates(map[string]any{
 		"status":     novo,
 		"updated_at": time.Now(),
@@ -537,7 +556,15 @@ func (h *Handler) UpdateOrderStatus(c *gin.Context) {
 	}
 
 	h.auditar(c, "encomenda_estado_alterado", "pedido", fmt.Sprint(p.ID),
-		fmt.Sprintf("%s -> %s", p.Status, novo))
+		fmt.Sprintf("%s -> %s", anterior, novo))
+
+	// Mantém sincronizados os outros painéis do mesmo restaurante: com dois postos ao
+	// balcão, um aceitar a encomenda deve reflectir-se no outro sem esperar.
+	h.Eventos_.Publicar(p.TenantID, eventos.TipoEncomendaEstado, gin.H{
+		"numero":   p.ID,
+		"status":   novo,
+		"anterior": anterior,
+	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Estado actualizado",

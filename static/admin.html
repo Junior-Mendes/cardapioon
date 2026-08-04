@@ -4,6 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Painel do Lojista - Gestão de Cardápio & Pedidos</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#111827">
+  <!-- Permite instalar no ecrã principal do iPhone, que é também o que habilita
+       notificações nesse sistema. -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="MenuOnline">
+  <link rel="apple-touch-icon" href="/static/icons/icone-192.png">
+  <link rel="icon" href="/static/icons/icone-192.png">
   <link rel="stylesheet" href="/static/css/style.css">
   <link rel="stylesheet" href="/static/css/admin.css">
 </head>
@@ -91,6 +100,9 @@
             <h1>Gestão de Pedidos</h1>
             <p>Acompanhe as encomendas para levantamento em tempo real</p>
           </div>
+          <span id="estado-tempo-real" class="estado-tempo-real" title="A ligar…">A ligar…</span>
+          <button type="button" class="btn btn-secondary" id="btn-instalar" hidden>📲 Instalar</button>
+          <button type="button" class="btn btn-secondary btn-som" id="btn-som">🔔 Toque para activar o som</button>
           <button class="btn btn-secondary" id="btn-refresh-orders"><span style="font-size:1.1rem;">🔄</span> Atualizar</button>
         </div>
 
@@ -568,6 +580,7 @@
   </div>
 
   <script src="/static/js/common.js"></script>
+  <script src="/static/js/alertas.js"></script>
   <script src="/static/js/admin.js"></script>
 </body>
 </html>
