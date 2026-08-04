@@ -246,6 +246,8 @@ func construirRouter(
 			cardapio.GET("", h.GetMenu)
 			cardapio.POST("", h.CreateMenuItem)
 			cardapio.PUT("/:id", h.UpdateMenuItem)
+			// Pausar ou retomar um prato numa só acção, sem reenviar o formulário todo.
+			cardapio.PATCH("/:id/disponibilidade", h.SetDisponibilidade)
 			cardapio.DELETE("/:id", h.DeleteMenuItem)
 		}
 

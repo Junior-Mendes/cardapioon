@@ -513,3 +513,209 @@ input:checked + .slider:before {
   padding: 1rem 1.25rem;
   border-top: 1px solid var(--border-color);
 }
+
+/* Observações do cliente numa linha da encomenda.
+   Destacadas de propósito: é uma instrução para a cozinha e perder-se-ia se tivesse o
+   mesmo peso visual que o nome do prato. */
+.order-item-obs {
+  display: block;
+  font-style: normal;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--warning);
+  margin-top: 0.15rem;
+}
+
+.order-item-obs::before {
+  content: '↳ ';
+  opacity: 0.7;
+}
+
+/* ===========================================================================
+   Gestão do menu
+   ===========================================================================
+   Era uma grelha plana de cartões grandes: com trinta pratos, encontrar um para
+   mudar o preço obrigava a percorrer tudo, e não se percebia a estrutura que o
+   cliente vê. Passa a secções recolhíveis com linhas compactas, na mesma ordem
+   do menu público. */
+
+.menu-admin-topo {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+
+.menu-admin-topo .menu-busca {
+  flex: 1;
+  min-width: 240px;
+  margin-bottom: 0;
+}
+
+.menu-admin-resumo {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* --- Secção de categoria --- */
+.menu-cat {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+  background: rgba(22, 30, 46, 0.35);
+}
+
+.menu-cat-cabecalho {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  border: none;
+  background: rgba(22, 30, 46, 0.7);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 0.95rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-cat-cabecalho:hover {
+  background: rgba(22, 30, 46, 0.95);
+}
+
+.menu-cat-seta {
+  width: 1rem;
+  flex: none;
+  color: var(--text-muted);
+}
+
+.menu-cat-nome {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+/* O resumo empurra-se para a direita: dá o número de pratos e quantos estão em
+   pausa sem obrigar a abrir a secção. */
+.menu-cat-resumo {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* --- Linha de prato --- */
+.menu-linha {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border-color);
+}
+
+/* Um prato em pausa fica visivelmente esmorecido: o lojista tem de perceber num
+   relance o que não está à venda. */
+.menu-linha-pausada {
+  opacity: 0.55;
+}
+
+.linha-img {
+  width: 48px;
+  height: 48px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  background-size: cover;
+  background-position: center;
+  background-color: var(--bg-tertiary);
+}
+
+.linha-img-vazia {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  opacity: 0.5;
+}
+
+.linha-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.linha-nome {
+  font-weight: 600;
+  color: #fff;
+  overflow-wrap: anywhere;
+}
+
+.linha-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.linha-preco {
+  font-weight: 700;
+  color: var(--success);
+}
+
+.linha-preco-antigo {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.linha-taxa,
+.linha-badge-pausa {
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--bg-tertiary);
+}
+
+.linha-badge-pausa {
+  background: rgba(255, 165, 2, 0.15);
+  color: var(--warning);
+}
+
+.linha-accoes {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: none;
+}
+
+.linha-btn {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.8rem;
+}
+
+.linha-btn-perigo {
+  color: var(--danger);
+  border-color: rgba(255, 71, 87, 0.3);
+}
+
+/* Em ecrã estreito a linha passa a duas: as acções descem para baixo do nome, em
+   vez de comprimirem o texto até ficar ilegível. */
+@media (max-width: 640px) {
+  .menu-linha {
+    flex-wrap: wrap;
+  }
+
+  .linha-info {
+    flex-basis: calc(100% - 48px - 0.85rem);
+  }
+
+  .linha-accoes {
+    width: 100%;
+    justify-content: flex-end;
+    padding-top: 0.5rem;
+  }
+}

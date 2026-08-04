@@ -392,6 +392,55 @@ func (h *Handler) UpdateMenuItem(c *gin.Context) {
 	c.JSON(http.StatusOK, item)
 }
 
+type disponibilidadeInput struct {
+	Disponivel *bool `json:"disponivel" binding:"required"`
+}
+
+// SetDisponibilidade pausa ou retoma um produto.
+//
+// Endpoint próprio, e não UpdateMenuItem, porque a acção tem de ser de um toque: um prato
+// acaba a meio do serviço e o lojista precisa de o esconder do menu imediatamente. Passar
+// pelo formulário completo exigiria reenviar nome, preço e categoria, e obrigaria a abrir
+// um modal com o balcão cheio.
+func (h *Handler) SetDisponibilidade(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		erroCliente(c, http.StatusBadRequest, "Identificador inválido")
+		return
+	}
+
+	var in disponibilidadeInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		erroCliente(c, http.StatusBadRequest, "Indique se o produto fica disponível")
+		return
+	}
+
+	// O escopo de tenant na escrita é o que impede pausar o produto de outro restaurante.
+	res := h.DB.Model(&models.MenuItem{}).
+		Scopes(middleware.TenantScope(c)).
+		Where("id = ?", id).
+		Update("disponivel", *in.Disponivel)
+	if res.Error != nil {
+		h.erroInterno(c, "alterar disponibilidade do produto", res.Error)
+		return
+	}
+	if res.RowsAffected == 0 {
+		erroCliente(c, http.StatusNotFound, "Produto não encontrado")
+		return
+	}
+
+	estado := "pausado"
+	if *in.Disponivel {
+		estado = "disponivel"
+	}
+	h.auditar(c, "produto_disponibilidade", "menu_item", fmt.Sprint(id), estado)
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":         id,
+		"disponivel": *in.Disponivel,
+	})
+}
+
 // DeleteMenuItem remove um item do cardápio.
 func (h *Handler) DeleteMenuItem(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)

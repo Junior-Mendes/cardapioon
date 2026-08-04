@@ -142,6 +142,7 @@ func montarRotas(h *handlers.Handler, resolver *middleware.TenantResolver, token
 		cardapio.GET("", h.GetMenu)
 		cardapio.POST("", h.CreateMenuItem)
 		cardapio.PUT("/:id", h.UpdateMenuItem)
+		cardapio.PATCH("/:id/disponibilidade", h.SetDisponibilidade)
 		cardapio.DELETE("/:id", h.DeleteMenuItem)
 
 		encomendas := admin.Group("/pedidos", middleware.RequireRole(middleware.RoleFuncionario))

@@ -219,7 +219,10 @@ function renderOrdersBoard() {
       .map(
         (i) => `
       <div class="order-item-row">
-        <span>${esc(i.quantidade)}x ${esc(i.nome)}</span>
+        <span>
+          ${esc(i.quantidade)}x ${esc(i.nome)}
+          ${i.observacoes ? `<em class="order-item-obs">${esc(i.observacoes)}</em>` : ''}
+        </span>
         <span>${esc(formatCents(i.total_linha_cents ?? i.preco_unitario_cents * i.quantidade))}</span>
       </div>`
       )
@@ -329,56 +332,249 @@ async function loadMenu() {
   }
 }
 
-const IMAGEM_OMISSAO = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500';
+// Termo de pesquisa do menu no painel.
+let buscaMenu = '';
 
+// Categorias recolhidas pelo lojista, guardadas na sessão para que o estado sobreviva a um
+// refresh — quem trabalha com uma categoria não quer reabri-la a cada recarregamento.
+const categoriasFechadas = new Set(
+  JSON.parse(sessionStorage.getItem('cardapio_categorias_fechadas') || '[]')
+);
+
+function guardarCategoriasFechadas() {
+  sessionStorage.setItem(
+    'cardapio_categorias_fechadas',
+    JSON.stringify([...categoriasFechadas])
+  );
+}
+
+// renderMenuGrid desenha o menu do painel agrupado por categoria.
+//
+// Antes era uma grelha plana de cartões grandes: com trinta pratos, encontrar um para
+// mudar o preço obrigava a percorrer tudo, e não se percebia a estrutura que o cliente vê.
+// Agora são secções recolhíveis com linhas compactas, na mesma ordem do menu público.
 function renderMenuGrid() {
   const container = document.getElementById('menu-items-admin');
   if (!container) return;
 
   if (menuItems.length === 0) {
     container.innerHTML =
-      '<div class="cart-empty glass" style="grid-column: 1/-1;"><p>O seu menu está vazio. Adicione pratos para começar.</p></div>';
+      '<div class="cart-empty glass"><p>O seu menu está vazio. Adicione o primeiro prato para começar.</p></div>';
+    actualizarResumoMenu();
     return;
   }
 
-  container.innerHTML = menuItems
-    .map((item) => {
-      const temDesconto = item.desconto_ativo && Number(item.preco_desconto_cents) > 0;
-      const precos = temDesconto
-        ? `<span class="price-original slashed">${esc(formatCents(item.preco_cents))}</span>
-           <span class="price-discounted">${esc(formatCents(item.preco_desconto_cents))}</span>`
-        : `<span class="price-original">${esc(formatCents(item.preco_cents))}</span>`;
+  const filtrados = filtrarMenuAdmin();
 
-      const badge = item.disponivel
-        ? '<div class="menu-item-badge" style="background:var(--success)">ACTIVO</div>'
-        : '<div class="menu-item-badge" style="background:var(--bg-tertiary); color:var(--text-muted)">EM PAUSA</div>';
-
-      // O URL da imagem entra numa propriedade CSS: escAttr remove parênteses, que de
-      // outro modo fechariam o url(...) e permitiriam injectar mais CSS.
-      const imagem = escAttr(item.imagem_url || IMAGEM_OMISSAO);
-
-      return `
-      <div class="menu-item-card glass">
-        <div class="menu-item-img" style="background-image: url('${imagem}')">${badge}</div>
-        <div class="menu-item-info">
-          <h3 class="menu-item-name">${esc(item.nome)}</h3>
-          <p class="menu-item-desc">${esc(item.descricao || '')}</p>
-          <div class="menu-item-price-row">${precos}</div>
-        </div>
-        <div class="menu-item-actions">
-          <button class="btn btn-secondary" style="flex:1; padding:0.5rem;" data-editar="${esc(item.id)}">Editar</button>
-          <button class="btn btn-outline" style="padding:0.5rem; color:var(--danger); border-color:var(--border-color);" data-apagar="${esc(item.id)}">Eliminar</button>
-        </div>
+  if (filtrados.length === 0) {
+    container.innerHTML = `
+      <div class="cart-empty glass">
+        <p>Nenhum prato corresponde a &laquo;${esc(buscaMenu)}&raquo;.</p>
       </div>`;
-    })
+    actualizarResumoMenu();
+    return;
+  }
+
+  // Agrupa preservando a ordem em que as categorias aparecem.
+  const porCategoria = new Map();
+  filtrados.forEach((item) => {
+    if (!porCategoria.has(item.categoria)) porCategoria.set(item.categoria, []);
+    porCategoria.get(item.categoria).push(item);
+  });
+
+  container.innerHTML = [...porCategoria.entries()]
+    .map(([categoria, itens]) => seccaoMenuHTML(categoria, itens))
     .join('');
 
+  ligarAccoesDoMenu(container);
+  actualizarResumoMenu();
+}
+
+function filtrarMenuAdmin() {
+  if (!buscaMenu) return menuItems;
+
+  const t = normalizarTexto(buscaMenu);
+  return menuItems.filter(
+    (i) =>
+      normalizarTexto(i.nome).includes(t) ||
+      normalizarTexto(i.categoria).includes(t) ||
+      normalizarTexto(i.descricao || '').includes(t)
+  );
+}
+
+// normalizarTexto remove acentos, para que "frances" encontre "Francesinha".
+function normalizarTexto(texto) {
+  return String(texto)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function seccaoMenuHTML(categoria, itens) {
+  const pausados = itens.filter((i) => !i.disponivel).length;
+  // Com pesquisa activa todas as secções abrem: esconder resultados atrás de um clique
+  // anularia a pesquisa.
+  const fechada = !buscaMenu && categoriasFechadas.has(categoria);
+
+  const resumo = [
+    `${itens.length} ${itens.length === 1 ? 'prato' : 'pratos'}`,
+    pausados > 0 ? `${pausados} em pausa` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return `
+    <section class="menu-cat">
+      <button type="button" class="menu-cat-cabecalho" data-categoria="${escAttr(categoria)}"
+              aria-expanded="${fechada ? 'false' : 'true'}">
+        <span class="menu-cat-seta" aria-hidden="true">${fechada ? '▸' : '▾'}</span>
+        <span class="menu-cat-nome">${esc(categoria)}</span>
+        <span class="menu-cat-resumo">${esc(resumo)}</span>
+      </button>
+      <div class="menu-cat-corpo"${fechada ? ' hidden' : ''}>
+        ${itens.map(linhaMenuHTML).join('')}
+      </div>
+    </section>`;
+}
+
+// linhaMenuHTML desenha um prato como linha, e não como cartão.
+//
+// A linha mostra tudo o que o lojista precisa de ver de relance — nome, preço, taxa de IVA,
+// se está em pausa — e o interruptor de disponibilidade fica ali, sem abrir nada.
+function linhaMenuHTML(item) {
+  const temDesconto = item.desconto_ativo && Number(item.preco_desconto_cents) > 0;
+
+  const preco = temDesconto
+    ? `<span class="linha-preco-antigo">${esc(formatCents(item.preco_cents))}</span>
+       <span class="linha-preco">${esc(formatCents(item.preco_desconto_cents))}</span>`
+    : `<span class="linha-preco">${esc(formatCents(item.preco_cents))}</span>`;
+
+  const miniatura = item.imagem_url
+    ? `<span class="linha-img" style="background-image:url('${escAttr(item.imagem_url)}')"></span>`
+    : `<span class="linha-img linha-img-vazia" aria-hidden="true">🍽</span>`;
+
+  const taxa = item.taxa_iva_bp > 0 ? `IVA ${item.taxa_iva_bp / 100}%` : 'Isento';
+
+  return `
+    <div class="menu-linha${item.disponivel ? '' : ' menu-linha-pausada'}" data-id="${esc(item.id)}">
+      ${miniatura}
+
+      <div class="linha-info">
+        <div class="linha-nome">${esc(item.nome)}</div>
+        <div class="linha-meta">
+          ${preco}
+          <span class="linha-taxa">${esc(taxa)}</span>
+          ${item.disponivel ? '' : '<span class="linha-badge-pausa">Em pausa</span>'}
+        </div>
+      </div>
+
+      <div class="linha-accoes">
+        <label class="switch" title="${item.disponivel ? 'Pausar este prato' : 'Voltar a mostrar'}">
+          <input type="checkbox" data-disponivel="${esc(item.id)}" ${item.disponivel ? 'checked' : ''}>
+          <span class="slider"></span>
+        </label>
+        <button type="button" class="btn btn-secondary linha-btn" data-editar="${esc(item.id)}">Editar</button>
+        <button type="button" class="btn btn-outline linha-btn linha-btn-perigo" data-apagar="${esc(item.id)}">Eliminar</button>
+      </div>
+    </div>`;
+}
+
+function ligarAccoesDoMenu(container) {
+  container.querySelectorAll('[data-categoria]').forEach((b) => {
+    b.addEventListener('click', () => alternarCategoria(b.dataset.categoria));
+  });
   container.querySelectorAll('[data-editar]').forEach((b) => {
     b.addEventListener('click', () => openItemModal(Number(b.dataset.editar)));
   });
   container.querySelectorAll('[data-apagar]').forEach((b) => {
     b.addEventListener('click', () => deleteMenuItem(Number(b.dataset.apagar)));
   });
+  container.querySelectorAll('[data-disponivel]').forEach((cb) => {
+    cb.addEventListener('change', () =>
+      alternarDisponibilidade(Number(cb.dataset.disponivel), cb.checked, cb)
+    );
+  });
+}
+
+function alternarCategoria(categoria) {
+  if (categoriasFechadas.has(categoria)) categoriasFechadas.delete(categoria);
+  else categoriasFechadas.add(categoria);
+  guardarCategoriasFechadas();
+  renderMenuGrid();
+}
+
+// alternarDisponibilidade pausa ou retoma um prato num toque.
+//
+// É a operação mais urgente do serviço: o prato acabou e tem de sair do menu já. Por isso
+// não passa pelo formulário completo, e a interface reage de imediato — se o servidor
+// falhar, o interruptor volta atrás.
+async function alternarDisponibilidade(id, disponivel, checkbox) {
+  checkbox.disabled = true;
+  try {
+    await api(`/api/admin/cardapio/${id}/disponibilidade`, {
+      metodo: 'PATCH',
+      corpo: { disponivel },
+    });
+
+    const item = menuItems.find((i) => i.id === id);
+    if (item) item.disponivel = disponivel;
+
+    showToast(disponivel ? 'Prato disponível' : 'Prato em pausa', 'success');
+    renderMenuGrid();
+  } catch (err) {
+    // Reverte para o estado real: deixar o interruptor na posição nova daria a impressão
+    // de que o prato foi pausado quando continua à venda.
+    checkbox.checked = !disponivel;
+    checkbox.disabled = false;
+    showToast(err.message, 'error');
+  }
+}
+
+function actualizarResumoMenu() {
+  const el = document.getElementById('menu-admin-resumo');
+  if (!el) return;
+
+  const total = menuItems.length;
+  const pausados = menuItems.filter((i) => !i.disponivel).length;
+  const categorias = new Set(menuItems.map((i) => i.categoria)).size;
+
+  if (total === 0) {
+    el.textContent = '';
+    return;
+  }
+
+  const partes = [
+    `${total} ${total === 1 ? 'prato' : 'pratos'}`,
+    `${categorias} ${categorias === 1 ? 'categoria' : 'categorias'}`,
+  ];
+  if (pausados > 0) partes.push(`${pausados} em pausa`);
+  el.textContent = partes.join(' · ');
+}
+
+function ligarBuscaMenuAdmin() {
+  const campo = document.getElementById('menu-admin-busca');
+  const limpar = document.getElementById('menu-admin-busca-limpar');
+  if (!campo) return;
+
+  let atrasado = null;
+  campo.addEventListener('input', () => {
+    clearTimeout(atrasado);
+    atrasado = setTimeout(() => {
+      buscaMenu = campo.value.trim();
+      if (limpar) limpar.hidden = buscaMenu === '';
+      renderMenuGrid();
+    }, 150);
+  });
+
+  if (limpar) {
+    limpar.addEventListener('click', () => {
+      campo.value = '';
+      buscaMenu = '';
+      limpar.hidden = true;
+      renderMenuGrid();
+      campo.focus();
+    });
+  }
 }
 
 function openItemModal(id = null) {
@@ -1143,6 +1339,7 @@ function setupEventListeners() {
     ligar(`nav-${nome}`, 'click', () => switchTab(nome));
   });
 
+  ligarBuscaMenuAdmin();
   ligar('btn-add-item', 'click', () => openItemModal());
   ligar('modal-close-btn', 'click', closeItemModal);
   ligar('item-form', 'submit', handleSaveItem);

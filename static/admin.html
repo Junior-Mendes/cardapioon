@@ -165,14 +165,28 @@
       <section id="tab-cardapio" style="display:none;">
         <div class="admin-header">
           <div class="admin-title">
-            <h1>Gestão do Cardápio</h1>
-            <p>Inclua, remova, edite preços, descontos e pause itens do cardápio</p>
+            <h1>O seu menu</h1>
+            <p>Organizado por categoria, como o cliente o vê. Pause um prato num toque quando acabar.</p>
           </div>
-          <button class="btn btn-primary" id="btn-add-item">Adicionar Prato</button>
+          <button class="btn btn-primary" id="btn-add-item">Adicionar prato</button>
         </div>
 
-        <div class="menu-grid" id="menu-items-admin">
-          <!-- Grade de pratos injetados via JS -->
+        <!-- Pesquisa e resumo. Num menu com muitas categorias, encontrar um prato para
+             editar o preço é a operação mais frequente do dia. -->
+        <div class="menu-admin-topo">
+          <div class="menu-busca">
+            <span class="menu-busca-icone" aria-hidden="true">🔎</span>
+            <input type="search" id="menu-admin-busca" class="menu-busca-campo"
+                   placeholder="Procurar prato ou categoria" autocomplete="off"
+                   aria-label="Procurar no menu">
+            <button type="button" id="menu-admin-busca-limpar" class="menu-busca-limpar"
+                    aria-label="Limpar pesquisa" hidden>&times;</button>
+          </div>
+          <p class="menu-admin-resumo" id="menu-admin-resumo"></p>
+        </div>
+
+        <div id="menu-items-admin">
+          <!-- Secções por categoria, injectadas por JS -->
         </div>
       </section>
 
