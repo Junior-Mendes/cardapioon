@@ -1,61 +1,105 @@
-/* Estilos do Cardápio do Cliente - Mobile-First & Moderno */
+/* ===========================================================================
+   Storefront do cliente — MOBILE-FIRST
+   ===========================================================================
 
+   Este ficheiro é exclusivo do menu público (menu.html). É o único ecrã que um
+   cliente usa, e usa-o quase sempre do telemóvel, à porta ou a caminho do
+   restaurante. Por isso é o único CSS do projecto escrito mobile-first a sério:
+
+     - As regras SEM media query são as do telemóvel. São o caminho por omissão,
+       o que garante que o ecrã pequeno nunca depende de uma excepção esquecida.
+     - As media queries são todas `min-width` e só ACRESCENTAM à medida que há
+       mais espaço. Nada é desfeito.
+
+   O painel do lojista (admin.css) continua desktop-first de propósito: é usado
+   num computador ou tablet, ao balcão. Inverter esse ficheiro seria risco sem
+   ganho.
+
+   Pontos de mudança:
+     640px   — tablet em retrato: duas colunas de produtos
+     900px   — carrinho passa a coluna lateral e a barra inferior desaparece
+     1200px  — ecrã largo: três colunas
+
+   Removido deste ficheiro: o CSS do simulador de cartão de crédito e do QR de
+   Pix (14 classes), que deixaram de ter uso quando o MVP passou a levantamento
+   ao balcão com pagamento na caixa.
+   =========================================================================== */
+
+/* ---------------------------------------------------------------------------
+   Layout base: uma coluna
+   ---------------------------------------------------------------------------
+   O carrinho não existe como coluna no telemóvel; vive na barra fixa inferior e
+   no modal de checkout. */
 .menu-layout {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 2rem 1.5rem;
+  padding: 0.75rem;
   display: grid;
-  grid-template-columns: 1fr 380px;
-  gap: 2rem;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+  /* Espaço para a barra de carrinho fixa, incluindo a área segura do iPhone. */
+  padding-bottom: calc(84px + env(safe-area-inset-bottom));
 }
 
-@media (max-width: 900px) {
-  .menu-layout {
-    grid-template-columns: 1fr;
-    padding: 1rem;
-    padding-bottom: 80px; /* Espaço para o botão flutuante do carrinho no celular */
-  }
-  .cart-sidebar {
-    display: none; /* Carrinho vira um modal bottom-sheet no celular */
-  }
+.cart-sidebar {
+  display: none;
 }
 
-/* Banner do Restaurante */
+/* ---------------------------------------------------------------------------
+   Banner do restaurante
+   ---------------------------------------------------------------------------
+   Compacto por omissão: o cliente veio ver pratos, e cada pixel gasto antes do
+   primeiro prato é mais rolamento até ao que ele quer. */
 .restaurant-banner {
-  background: linear-gradient(rgba(11, 15, 25, 0.4), rgba(11, 15, 25, 0.9)), url('https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=1200&auto=format&fit=crop&q=60') no-repeat center;
+  background:
+    linear-gradient(rgba(11, 15, 25, 0.4), rgba(11, 15, 25, 0.9)),
+    url('https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=1200&auto=format&fit=crop&q=60')
+      no-repeat center;
   background-size: cover;
-  padding: 4rem 2rem 2rem;
+  padding: 1.5rem 1.25rem 1.25rem;
   border-radius: var(--radius-md);
-  margin-bottom: 2rem;
+  margin-bottom: 1.25rem;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 
 .restaurant-name {
-  font-size: 2.25rem;
+  font-size: 1.4rem;
   font-weight: 800;
+  line-height: 1.2;
   color: #fff;
+  overflow-wrap: anywhere;
 }
 
 .restaurant-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   align-self: flex-start;
-  background: var(--success);
-  color: #fff;
-  font-size: 0.8rem;
-  padding: 0.25rem 0.75rem;
-  border-radius: 20px;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--on-primary, #fff);
+  font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-/* Categoria Slider */
+/* ---------------------------------------------------------------------------
+   Barra de categorias
+   ---------------------------------------------------------------------------
+   Rola na horizontal desde o início. Partir para várias linhas num telemóvel
+   empurra os produtos para fora do ecrã. */
 .categories-bar {
   display: flex;
-  gap: 0.75rem;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
   overflow-x: auto;
-  padding-bottom: 1rem;
-  margin-bottom: 2rem;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 0.5rem;
+  margin-bottom: 1.25rem;
   scrollbar-width: none;
 }
 
@@ -64,176 +108,174 @@
 }
 
 .category-tab {
-  padding: 0.6rem 1.25rem;
-  border-radius: 30px;
-  background: var(--bg-secondary);
-  color: var(--text-muted);
-  font-weight: 600;
+  flex: none;
   white-space: nowrap;
+  padding: 0.6rem 1rem;
+  /* 44px de altura mínima: abaixo disso os erros de toque são visíveis. */
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: rgba(22, 30, 46, 0.6);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  font-weight: 600;
   cursor: pointer;
   transition: var(--transition);
-  border: 1px solid var(--border-color);
 }
 
-.category-tab.active, .category-tab:hover {
+.category-tab.active,
+.category-tab:hover {
   background: var(--primary);
-  color: #fff;
   border-color: var(--primary);
+  color: var(--on-primary, #fff);
 }
 
-/* Listagem de Itens */
+/* ---------------------------------------------------------------------------
+   Lista de produtos
+   ---------------------------------------------------------------------------
+   Uma coluna no telemóvel, com o cartão horizontal — imagem à esquerda, texto à
+   direita. Assim cabem três ou quatro no ecrã sem rolar, o que dá ao cliente
+   uma noção do menu de uma só vez. */
 .category-section {
-  margin-bottom: 2.5rem;
-}
-
-.category-title {
-  font-size: 1.5rem;
-  font-weight: 700;
-  margin-bottom: 1.25rem;
-  border-left: 4px solid var(--primary);
-  padding-left: 0.75rem;
+  margin-bottom: 1.75rem;
 }
 
 .items-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 1.5rem;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
 }
 
 .product-card {
   display: flex;
   border-radius: var(--radius-md);
   overflow: hidden;
-  height: 140px;
-  transition: var(--transition);
   background: rgba(22, 30, 46, 0.4);
   border: 1px solid var(--border-color);
-}
-
-.product-card:hover {
-  transform: translateY(-3px);
-  border-color: rgba(255, 71, 87, 0.4);
-  box-shadow: var(--shadow);
+  transition: var(--transition);
 }
 
 .product-img {
-  width: 120px;
-  height: 100%;
+  width: 96px;
+  flex-shrink: 0;
   background-size: cover;
   background-position: center;
   position: relative;
-  flex-shrink: 0;
 }
 
 .discount-tag {
   position: absolute;
-  top: 8px;
-  left: 8px;
+  top: 6px;
+  left: 6px;
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--radius-sm);
   background: var(--danger);
   color: #fff;
-  font-weight: 700;
   font-size: 0.7rem;
-  padding: 0.15rem 0.4rem;
-  border-radius: 4px;
+  font-weight: 800;
 }
 
 .product-details {
-  padding: 1rem;
+  flex: 1;
+  /* Permite que o texto encurte em vez de esticar o cartão para fora do ecrã. */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  flex: 1;
+  gap: 0.5rem;
+  padding: 0.75rem;
 }
 
 .product-info {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  min-width: 0;
 }
 
 .product-name {
-  font-size: 1.05rem;
+  font-size: 0.98rem;
   font-weight: 700;
   color: #fff;
+  margin-bottom: 0.2rem;
+  overflow-wrap: anywhere;
 }
 
 .product-desc {
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   color: var(--text-muted);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  /* Duas linhas no telemóvel: dá ideia do prato sem a descrição dominar a lista. */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  line-height: 1.3;
 }
 
 .product-footer {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .product-price-col {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
 }
 
 .prod-original-price {
-  font-weight: 700;
-  font-size: 1.1rem;
+  font-size: 1rem;
+  font-weight: 800;
   color: #fff;
 }
 
 .prod-original-price.slashed {
-  text-decoration: line-through;
-  color: var(--text-muted);
   font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-decoration: line-through;
 }
 
 .prod-discount-price {
-  font-weight: 700;
-  font-size: 1.1rem;
+  font-size: 1rem;
+  font-weight: 800;
   color: var(--success);
 }
 
 .add-btn {
-  background: var(--primary);
-  color: #fff;
+  flex: none;
+  /* 44x44 é o mínimo confortável para um toque. */
+  width: 44px;
+  height: 44px;
   border: none;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  font-size: 1.25rem;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  color: var(--on-primary, #fff);
+  font-size: 1.5rem;
+  line-height: 1;
   cursor: pointer;
   transition: var(--transition);
-  box-shadow: 0 2px 8px rgba(255, 71, 87, 0.3);
 }
 
 .add-btn:hover {
-  transform: scale(1.1);
-  background: var(--primary-hover);
+  filter: brightness(1.1);
 }
 
-/* Carrinho Lateral */
-.cart-sidebar {
-  border-radius: var(--radius-md);
-  padding: 1.5rem;
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100vh - 4rem);
-  position: sticky;
-  top: 2rem;
+.add-btn:active {
+  transform: scale(0.94);
 }
 
+/* ---------------------------------------------------------------------------
+   Carrinho: conteúdo partilhado entre a barra lateral e o modal
+   --------------------------------------------------------------------------- */
 .cart-title {
-  font-size: 1.25rem;
+  font-size: 1.15rem;
   font-weight: 700;
-  padding-bottom: 1rem;
+  padding-bottom: 0.85rem;
   border-bottom: 1px solid var(--border-color);
   display: flex;
   justify-content: space-between;
@@ -241,114 +283,129 @@
 }
 
 .cart-empty {
-  padding: 3rem 0;
   text-align: center;
+  padding: 2rem 1rem;
   color: var(--text-muted);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1rem;
 }
 
 .cart-empty-icon {
   font-size: 2.5rem;
-  opacity: 0.5;
+  margin-bottom: 0.5rem;
 }
 
 .cart-items {
-  flex: 1;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  padding: 1rem 0;
+  gap: 0.75rem;
+  padding: 0.85rem 0;
+  overflow-y: auto;
 }
 
 .cart-item {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  font-size: 0.95rem;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .cart-item-details {
-  flex: 1;
-  padding-right: 1rem;
+  min-width: 0;
 }
 
 .cart-item-name {
+  font-size: 0.9rem;
   font-weight: 600;
+  color: #fff;
+  overflow-wrap: anywhere;
 }
 
 .cart-item-price {
+  font-size: 0.82rem;
   color: var(--text-muted);
-  font-size: 0.85rem;
 }
 
 .cart-item-qty {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  background: var(--bg-tertiary);
-  padding: 0.25rem 0.5rem;
-  border-radius: 20px;
+  gap: 0.5rem;
+  flex: none;
 }
 
 .qty-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-main);
-  font-weight: 700;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: rgba(22, 30, 46, 0.8);
+  color: #fff;
+  font-size: 1.1rem;
+  line-height: 1;
   cursor: pointer;
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.9rem;
+  transition: var(--transition);
+}
+
+/* Em ecrãs de toque os botões de quantidade crescem: estão lado a lado e um erro
+   de toque altera a encomenda. */
+@media (pointer: coarse) {
+  .qty-btn {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+.qty-btn:hover {
+  border-color: var(--primary);
 }
 
 .cart-totals {
-  border-top: 1px solid var(--border-color);
-  padding-top: 1rem;
-  margin-bottom: 1.5rem;
-  display: flex;
+  /* Revelado por JS quando o carrinho tem itens. */
+  display: none;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.4rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border-color);
 }
 
 .total-row {
   display: flex;
   justify-content: space-between;
-  font-weight: 500;
+  font-size: 0.9rem;
+  color: var(--text-muted);
 }
 
 .total-row.grand-total {
-  font-size: 1.25rem;
-  font-weight: 700;
-  color: var(--success);
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #fff;
 }
 
-/* Modal Bottom-Sheet Celular */
+/* ---------------------------------------------------------------------------
+   Barra de carrinho fixa (só telemóvel)
+   ---------------------------------------------------------------------------
+   É o botão principal do storefront no telemóvel. Só aparece quando há algo no
+   carrinho: uma barra vazia rouba espaço sem servir. */
 .mobile-cart-bar {
   display: none;
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
+  z-index: 99;
   background: var(--bg-secondary);
   border-top: 1px solid var(--border-color);
-  padding: 1rem 1.5rem;
-  z-index: 99;
+  padding: 0.85rem 1.25rem;
+  /* Acima do indicador de home do iPhone, que de outro modo fica sobre o botão. */
+  padding-bottom: calc(0.85rem + env(safe-area-inset-bottom));
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
 }
 
-@media (max-width: 900px) {
-  .mobile-cart-bar.active {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.4);
-  }
+.mobile-cart-bar.active {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  min-height: 56px;
 }
 
 .mobile-cart-info {
@@ -357,272 +414,211 @@
 }
 
 .mobile-cart-qty {
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: var(--text-muted);
 }
 
 .mobile-cart-total {
-  font-size: 1.2rem;
-  font-weight: 700;
-  color: var(--success);
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #fff;
 }
 
-/* Checkout Progress Indicator */
+/* ---------------------------------------------------------------------------
+   Indicador de passos do checkout
+   --------------------------------------------------------------------------- */
 .checkout-steps {
+  position: relative;
   display: flex;
   justify-content: space-between;
-  margin-bottom: 2rem;
-  position: relative;
+  margin-bottom: 1.5rem;
 }
 
 .checkout-steps::before {
-  content: "";
+  content: '';
   position: absolute;
   top: 50%;
-  left: 0;
-  right: 0;
+  left: 6%;
+  right: 6%;
   height: 2px;
   background: var(--border-color);
-  z-index: 1;
   transform: translateY(-50%);
+  z-index: 0;
 }
 
 .step-item {
   position: relative;
-  z-index: 2;
-  background: var(--bg-secondary);
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
+  z-index: 1;
+  width: 34px;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
-  font-size: 0.9rem;
+  border-radius: 50%;
   border: 2px solid var(--border-color);
+  background: var(--bg-secondary);
   color: var(--text-muted);
-  transition: var(--transition);
+  font-size: 0.85rem;
+  font-weight: 700;
 }
 
 .step-item.active {
   border-color: var(--primary);
   color: var(--primary);
-  background: var(--bg-tertiary);
-  box-shadow: 0 0 10px rgba(255, 71, 87, 0.3);
 }
 
 .step-item.completed {
-  background: var(--success);
   border-color: var(--success);
+  background: var(--success);
   color: #fff;
 }
 
-/* 3D Flip Card Simulation */
-.flip-card {
-  perspective: 1000px;
-  width: 100%;
-  height: 190px;
-  margin: 1.5rem 0;
-}
-
-.flip-card-inner {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  text-align: center;
-  transition: transform 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  transform-style: preserve-3d;
-}
-
-.flip-card.flipped .flip-card-inner {
-  transform: rotateY(180deg);
-}
-
-.card-front, .card-back {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  -webkit-backface-visibility: hidden;
-  backface-visibility: hidden;
-  border-radius: 12px;
-  padding: 1.5rem;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  box-shadow: 0 10px 25px rgba(0,0,0,0.3);
-}
-
-.card-front {
-  background: linear-gradient(135deg, #3867d6 0%, #4b7bec 100%);
-  color: #fff;
-  text-align: left;
-}
-
-.card-back {
-  background: linear-gradient(135deg, #4b6584 0%, #2f3640 100%);
-  color: #fff;
-  transform: rotateY(180deg);
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 1.5rem 0; /* Espaço para a tarja preta */
-}
-
-.card-chip {
-  width: 45px;
-  height: 35px;
-  background: #f1c40f;
-  border-radius: 4px;
-}
-
-.card-number {
-  font-size: 1.25rem;
-  letter-spacing: 2px;
-  font-weight: 600;
-  margin: 1.5rem 0 0.5rem;
-}
-
-.card-row {
-  display: flex;
-  justify-content: space-between;
-}
-
-.card-label {
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.6);
-  margin-bottom: 2px;
-}
-
-.card-holder, .card-expiry {
-  font-size: 0.9rem;
-  font-weight: 500;
-}
-
-.card-stripe {
-  background: #000;
-  height: 40px;
-  width: 100%;
-  margin-top: 10px;
-}
-
-.card-signature {
-  background: #fff;
-  color: #000;
-  padding: 0.3rem 1rem;
-  text-align: right;
-  width: 80%;
-  margin: 0 auto;
-  border-radius: 4px;
-  font-weight: 700;
-  font-style: italic;
-}
-
-/* PIX QR Code & Copy Info */
-.pix-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1.25rem;
-  padding: 1.5rem;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  margin: 1.5rem 0;
-}
-
-.pix-qr {
-  width: 160px;
-  height: 160px;
-  background: #fff;
-  border-radius: var(--radius-sm);
-  padding: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.pix-key-box {
-  width: 100%;
-  display: flex;
-  gap: 0.5rem;
-}
-
-/* Payment Toggles Checkboxes */
+/* ---------------------------------------------------------------------------
+   Métodos de pagamento e confirmação
+   --------------------------------------------------------------------------- */
 .payment-options-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0.75rem;
-  margin: 1.25rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
 }
 
 .payment-label {
   display: flex;
   align-items: center;
-  gap: 1rem;
-  padding: 1rem;
-  border-radius: var(--radius-md);
-  background: var(--bg-secondary);
-  border: 2px solid var(--border-color);
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  /* Toda a área é tocável, não apenas o círculo do radio. */
+  min-height: 56px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: rgba(22, 30, 46, 0.6);
   cursor: pointer;
   transition: var(--transition);
 }
 
-.payment-label:hover {
-  border-color: var(--primary);
-}
-
-.payment-label input[type="radio"] {
-  accent-color: var(--primary);
-  width: 18px;
-  height: 18px;
-}
-
+.payment-label:hover,
 .payment-label.selected {
   border-color: var(--primary);
-  background: rgba(255, 71, 87, 0.05);
+  background: rgba(22, 30, 46, 0.9);
+}
+
+.payment-label input[type='radio'] {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  accent-color: var(--primary);
 }
 
 .payment-info-text {
   font-size: 0.8rem;
   color: var(--text-muted);
-  margin-top: 4px;
+  margin-top: 0.15rem;
 }
 
+/* Painel do passo de confirmação.
+   O nome .pix-container mantém-se porque é usado pelo JS; o Pix foi removido do
+   produto e a classe merece ser renomeada num passo em que o JS mude também. */
+.pix-container {
+  padding: 1.1rem;
+  border-radius: var(--radius-sm);
+  background: rgba(22, 30, 46, 0.6);
+  border: 1px solid var(--border-color);
+  text-align: center;
+}
 
-/* Banner do restaurante em telemóvel.
-   Com 4rem de padding superior consumia mais de um terço do ecrã antes de o
-   cliente ver um único prato, o que atrasa o que ele veio fazer. */
-@media (max-width: 600px) {
+/* ===========================================================================
+   640px — tablet em retrato
+   ===========================================================================
+   Há espaço para duas colunas de produtos e para um banner com mais presença. */
+@media (min-width: 640px) {
+  .menu-layout {
+    padding: 1.5rem 1.25rem;
+    padding-bottom: calc(84px + env(safe-area-inset-bottom));
+    gap: 1.5rem;
+  }
+
   .restaurant-banner {
-    padding: 1.75rem 1.25rem 1.25rem;
-    margin-bottom: 1.25rem;
+    padding: 2.5rem 1.75rem 1.75rem;
+    margin-bottom: 1.75rem;
   }
 
   .restaurant-name {
-    font-size: 1.4rem;
+    font-size: 1.9rem;
   }
 
+  .items-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+  }
+
+  .product-img {
+    width: 110px;
+  }
+
+  .product-name {
+    font-size: 1.05rem;
+  }
+
+  .category-section {
+    margin-bottom: 2.25rem;
+  }
+}
+
+/* ===========================================================================
+   900px — desktop
+   ===========================================================================
+   O carrinho passa a coluna lateral permanente e a barra fixa inferior deixa de
+   fazer sentido: o total está sempre visível à direita. */
+@media (min-width: 900px) {
   .menu-layout {
-    padding: 0.75rem;
-    /* Espaço para a barra de carrinho fixa, incluindo a área segura do iPhone. */
-    padding-bottom: calc(84px + env(safe-area-inset-bottom));
+    grid-template-columns: 1fr 380px;
+    padding: 2rem 1.5rem;
+    gap: 2rem;
   }
 
-  .categories-bar {
-    /* As categorias rolam na horizontal em vez de partirem para várias linhas. */
-    overflow-x: auto;
-    flex-wrap: nowrap;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
+  .cart-sidebar {
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 2rem;
+    max-height: calc(100vh - 4rem);
+    padding: 1.5rem;
+    border-radius: var(--radius-md);
   }
 
-  .categories-bar::-webkit-scrollbar {
+  /* A barra inferior é redundante com a coluna lateral. */
+  .mobile-cart-bar,
+  .mobile-cart-bar.active {
     display: none;
   }
 
-  .category-tab {
-    white-space: nowrap;
-    flex: none;
+  .restaurant-banner {
+    padding: 4rem 2rem 2rem;
+    margin-bottom: 2rem;
+  }
+
+  .restaurant-name {
+    font-size: 2.2rem;
+  }
+
+  /* Com o rato disponível, o cartão reage ao apontador. */
+  .product-card:hover {
+    transform: translateY(-3px);
+    border-color: rgba(255, 71, 87, 0.4);
+    box-shadow: var(--shadow);
+  }
+
+  .product-desc {
+    -webkit-line-clamp: 3;
+  }
+}
+
+/* ===========================================================================
+   1200px — ecrã largo
+   ===========================================================================
+   Só a partir daqui uma terceira coluna não torna os cartões estreitos. */
+@media (min-width: 1200px) {
+  .items-grid {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   }
 }

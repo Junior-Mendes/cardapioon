@@ -512,12 +512,9 @@ select.form-control optgroup {
   }
 }
 
-/* --- 4. Barras fixas e o indicador de home -----------------------------------
-   A barra de carrinho fixa ficava por baixo do indicador de home nos iPhones
-   recentes, o que tornava o botão de finalizar difícil de acertar. */
-.mobile-cart-bar {
-  padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
-}
+/* --- 4. Áreas seguras em barras fixas ----------------------------------------
+   As barras fixas do storefront são tratadas em menu.css, que é o ficheiro do
+   ecrã do cliente. Aqui ficam apenas as regras partilhadas com o painel. */
 
 /* --- 5. Sem transbordo horizontal --------------------------------------------
    Uma única palavra longa num nome de produto, ou uma tabela de registos DNS,
@@ -527,9 +524,8 @@ body {
   overflow-x: hidden;
 }
 
-.product-name,
-.product-desc,
-.cart-item-name,
+/* Quebra de palavras longas em nomes introduzidos pelo lojista. Os selectores do
+   storefront estão em menu.css; aqui ficam os do painel. */
 .order-client,
 .menu-item-name {
   overflow-wrap: anywhere;
