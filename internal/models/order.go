@@ -72,9 +72,19 @@ type Pedido struct {
 }
 
 type OrderItem struct {
-	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	PedidoID uint   `gorm:"not null;index" json:"pedido_id"`
-	Nome     string `gorm:"type:varchar(150);not null" json:"nome"`
+	ID       uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	PedidoID uint `gorm:"not null;index" json:"pedido_id"`
+
+	// MenuItemID liga a linha ao produto de origem. Serve para calcular os destaques do
+	// menu ("os mais pedidos"); é nullable porque as linhas antigas guardavam só o nome.
+	MenuItemID *uint `gorm:"index" json:"menu_item_id"`
+
+	Nome string `gorm:"type:varchar(150);not null" json:"nome"`
+
+	// Observacoes é o pedido especial do cliente para esta linha: "sem cebola",
+	// "bem passado". Pertence à linha da encomenda e não ao produto, porque é uma escolha
+	// daquela compra.
+	Observacoes string `gorm:"type:varchar(280)" json:"observacoes"`
 
 	Quantidade int `gorm:"not null" json:"quantidade"`
 

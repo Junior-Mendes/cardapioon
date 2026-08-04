@@ -1227,6 +1227,137 @@ func TestDesligarAssinaturaDaPlataformaPersiste(t *testing.T) {
 	}
 }
 
+// TestObservacoesSeparamLinhas: o mesmo prato com instruções diferentes tem de dar duas
+// linhas, ou a cozinha perde a indicação de uma delas.
+func TestObservacoesSeparamLinhas(t *testing.T) {
+	amb := montarAmbiente(t)
+
+	corpo := fmt.Sprintf(`{
+		"cliente_nome":"Cliente",
+		"cliente_telefone":"912345678",
+		"forma_pagamento":"dinheiro",
+		"itens":[
+			{"menu_item_id":%d,"quantidade":1,"observacoes":"sem cebola"},
+			{"menu_item_id":%d,"quantidade":2,"observacoes":""},
+			{"menu_item_id":%d,"quantidade":1,"observacoes":"sem cebola"}
+		]
+	}`, amb.itemA.ID, amb.itemA.ID, amb.itemA.ID)
+
+	rec := amb.fazer(pedidoHTTP{
+		metodo: "POST", rota: "/api/pedidos", corpo: corpo,
+		host: amb.tenantA.Slug + "." + dominioTeste,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Encomenda struct {
+			PublicToken     string `json:"public_token"`
+			ValorTotalCents int64  `json:"valor_total_cents"`
+		} `json:"encomenda"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4 unidades a 10,00 € = 40,00 €, independentemente de como estão agrupadas.
+	if resp.Encomenda.ValorTotalCents != 4000 {
+		t.Errorf("total = %d, esperado 4000", resp.Encomenda.ValorTotalCents)
+	}
+
+	var itens []models.OrderItem
+	if err := amb.gdb.
+		Joins("JOIN pedidos p ON p.id = itens_pedido.pedido_id").
+		Where("p.public_token = ?", resp.Encomenda.PublicToken).
+		Find(&itens).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Duas linhas: uma com "sem cebola" (quantidade 2, as duas entradas iguais somadas) e
+	// outra sem observações (quantidade 2).
+	if len(itens) != 2 {
+		t.Fatalf("%d linhas, esperado 2", len(itens))
+	}
+
+	porObs := map[string]int{}
+	for _, it := range itens {
+		porObs[it.Observacoes] = it.Quantidade
+		if it.MenuItemID == nil || *it.MenuItemID != amb.itemA.ID {
+			t.Errorf("linha sem ligação correcta ao produto: %v", it.MenuItemID)
+		}
+	}
+	if porObs["sem cebola"] != 2 {
+		t.Errorf("linha \"sem cebola\" com quantidade %d, esperado 2", porObs["sem cebola"])
+	}
+	if porObs[""] != 2 {
+		t.Errorf("linha sem observações com quantidade %d, esperado 2", porObs[""])
+	}
+}
+
+// TestDestaquesVemDoHistorico: a secção "mais pedidos" é calculada das encomendas reais, e
+// está vazia num restaurante sem histórico.
+func TestDestaquesVemDoHistorico(t *testing.T) {
+	amb := montarAmbiente(t)
+	host := amb.tenantA.Slug + "." + dominioTeste
+
+	lerDestaques := func() []uint {
+		rec := amb.fazer(pedidoHTTP{metodo: "GET", rota: "/api/public-menu", host: host})
+		var resp struct {
+			Destaques []uint `json:"destaques"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp.Destaques
+	}
+
+	// A encomenda semeada não tem itens_pedido, pelo que não há histórico.
+	if d := lerDestaques(); len(d) != 0 {
+		t.Errorf("destaques num restaurante sem histórico: %v", d)
+	}
+
+	// Um produto adicional, para que haja mais de um candidato.
+	segundo := models.MenuItem{
+		TenantID: amb.tenantA.ID, Nome: "Sopa", PrecoCents: 300,
+		TaxaIVABP: dinheiro.TaxaIntermedia, Categoria: "Sopas", Disponivel: true,
+	}
+	segundo.SincronizarLegado()
+	if err := amb.gdb.Create(&segundo).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// O segundo produto é pedido em maior quantidade e deve ficar à frente.
+	corpo := fmt.Sprintf(`{
+		"cliente_nome":"Cliente","cliente_telefone":"912345678",
+		"forma_pagamento":"dinheiro",
+		"itens":[{"menu_item_id":%d,"quantidade":1},{"menu_item_id":%d,"quantidade":5}]
+	}`, amb.itemA.ID, segundo.ID)
+	if rec := amb.fazer(pedidoHTTP{metodo: "POST", rota: "/api/pedidos",
+		corpo: corpo, host: host}); rec.Code != http.StatusCreated {
+		t.Fatalf("criar encomenda: status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	d := lerDestaques()
+	if len(d) != 2 {
+		t.Fatalf("%d destaques, esperado 2: %v", len(d), d)
+	}
+	if d[0] != segundo.ID {
+		t.Errorf("primeiro destaque = %d, esperado %d (o mais pedido)", d[0], segundo.ID)
+	}
+
+	// Um produto indisponível não pode aparecer nos destaques.
+	if err := amb.gdb.Model(&segundo).Update("disponivel", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	d = lerDestaques()
+	for _, id := range d {
+		if id == segundo.ID {
+			t.Error("produto indisponível aparece nos destaques")
+		}
+	}
+}
+
 // TestErroInternoNaoExpoeDetalhesEmProducao cobre a fuga de informação dos handlers.
 func TestErroInternoNaoExpoeDetalhesEmProducao(t *testing.T) {
 	amb := montarAmbiente(t)

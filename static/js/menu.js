@@ -11,7 +11,13 @@
 
 let menuData = null;
 let cart = [];
-let activeCategory = 'all';
+// Termo de pesquisa activo. Vazio mostra o menu completo.
+let termoBusca = '';
+// Prato aberto no modal de detalhe, e a quantidade escolhida lá.
+let itemAberto = null;
+let qtdAberta = 1;
+// Observador que destaca a categoria da secção visível.
+let observadorSeccoes = null;
 let currentStep = 1;
 
 // Chave de idempotência da encomenda em curso.
@@ -104,118 +110,397 @@ function renderRestaurantHeader() {
   document.getElementById('rest-name').innerText = rest.nome;
 }
 
-// Renderiza a barra de categorias
+// categoriasDoMenu devolve as categorias na ordem em que aparecem, com os destaques à
+// frente quando existem.
+function categoriasDoMenu() {
+  const cats = [];
+  menuData.itens.forEach((i) => {
+    if (!cats.includes(i.categoria)) cats.push(i.categoria);
+  });
+  return cats;
+}
+
+// idParaSeccao converte o nome de uma categoria num id de elemento estável.
+//
+// O nome vem do lojista e pode ter acentos, espaços ou pontuação; usá-lo directamente num
+// id e num selector quebraria. O índice garante unicidade mesmo com nomes que normalizem
+// para o mesmo texto.
+function idParaSeccao(indice) {
+  return `secao-${indice}`;
+}
+
+// renderCategories desenha a barra de navegação.
+//
+// Ao contrário da versão anterior, os separadores não filtram o conteúdo: todas as
+// categorias são visíveis como secções e a barra leva o cliente até elas. É assim que
+// funcionam as apps de comida, e evita que o cliente pense que o menu é só o que está
+// visível.
 function renderCategories() {
-  const categories = ['all'];
-  menuData.itens.forEach(item => {
-    if (!categories.includes(item.categoria)) {
-      categories.push(item.categoria);
+  const bar = document.getElementById('categories-bar');
+  const cats = categoriasDoMenu();
+  const temDestaques = (menuData.destaques || []).length > 0;
+
+  const botoes = [];
+  if (temDestaques) {
+    botoes.push(`<button type="button" class="category-tab" data-alvo="secao-destaques">Mais pedidos</button>`);
+  }
+  cats.forEach((cat, i) => {
+    botoes.push(
+      `<button type="button" class="category-tab" data-alvo="${idParaSeccao(i)}">${esc(cat)}</button>`
+    );
+  });
+
+  bar.innerHTML = botoes.join('');
+
+  bar.querySelectorAll('[data-alvo]').forEach((b) => {
+    b.addEventListener('click', () => irParaSeccao(b.dataset.alvo));
+  });
+
+  marcarCategoriaActiva(temDestaques ? 'secao-destaques' : idParaSeccao(0));
+}
+
+// irParaSeccao rola até uma secção, compensando a altura da barra fixa.
+function irParaSeccao(id) {
+  const alvo = document.getElementById(id);
+  if (!alvo) return;
+
+  const barra = document.getElementById('categories-bar');
+  const offset = (barra ? barra.offsetHeight : 0) + 12;
+  const y = alvo.getBoundingClientRect().top + window.scrollY - offset;
+
+  window.scrollTo({ top: y, behavior: 'smooth' });
+  marcarCategoriaActiva(id);
+}
+
+// marcarCategoriaActiva destaca um separador e traz-no para dentro da barra.
+//
+// O scrollIntoView horizontal importa: com muitas categorias, a activa pode estar fora do
+// que se vê, e o cliente perderia a referência de onde está no menu.
+function marcarCategoriaActiva(id) {
+  const bar = document.getElementById('categories-bar');
+  if (!bar) return;
+
+  bar.querySelectorAll('[data-alvo]').forEach((b) => {
+    const activa = b.dataset.alvo === id;
+    b.classList.toggle('active', activa);
+    if (activa) {
+      b.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
     }
   });
-
-  const bar = document.getElementById('categories-bar');
-  bar.innerHTML = categories.map(cat => {
-    const label = cat === 'all' ? 'Todos os pratos' : cat;
-    const activeClass = cat === activeCategory ? 'active' : '';
-    // data-categoria em vez de onclick: a CSP não permite handlers inline, e o nome da
-    // categoria vem do lojista, pelo que interpolá-lo em JavaScript seria injecção.
-    return `<div class="category-tab ${activeClass}" data-categoria="${esc(cat)}">${esc(label)}</div>`;
-  }).join('');
-
-  bar.querySelectorAll('[data-categoria]').forEach(tab => {
-    tab.addEventListener('click', () => filterCategory(tab.dataset.categoria));
-  });
 }
 
-// Filtra produtos pela categoria
-function filterCategory(cat) {
-  activeCategory = cat;
-  renderCategories();
-  renderProducts();
-}
-
-// Renderiza os produtos na tela
+// renderProducts desenha todas as secções do menu.
 function renderProducts() {
   const container = document.getElementById('menu-items-container');
-  const filtered = activeCategory === 'all' 
-    ? menuData.itens 
-    : menuData.itens.filter(i => i.categoria === activeCategory);
+  const itens = itensFiltrados();
 
-  if (filtered.length === 0) {
-    container.innerHTML = `<div class="cart-empty glass" style="grid-column: 1/-1;"><p>Nenhum item disponível nesta categoria.</p></div>`;
+  if (termoBusca && itens.length === 0) {
+    container.innerHTML = `
+      <div class="cart-empty glass">
+        <div class="cart-empty-icon">🔎</div>
+        <h3>Nada encontrado</h3>
+        <p>Não há pratos com &laquo;${esc(termoBusca)}&raquo;. Tente outra palavra.</p>
+      </div>`;
     return;
   }
 
-  container.innerHTML = filtered.map(item => {
-    const hasDiscount = item.desconto_ativo && item.preco_desconto_cents > 0;
+  // Com pesquisa activa mostra-se uma lista única: agrupar por categoria dispersa
+  // resultados que o cliente quer ver juntos.
+  if (termoBusca) {
+    container.innerHTML = seccaoHTML(
+      'secao-busca',
+      `${itens.length} ${itens.length === 1 ? 'resultado' : 'resultados'}`,
+      itens
+    );
+    ligarBotoesDeItem(container);
+    return;
+  }
 
-    // Todos os valores vêm em cêntimos do servidor; nada é recalculado aqui.
-    const priceDisplay = hasDiscount
-      ? `<span class="prod-original-price slashed">${esc(formatCents(item.preco_cents))}</span>
-         <span class="prod-discount-price">${esc(formatCents(item.preco_desconto_cents))}</span>`
-      : `<span class="prod-original-price">${esc(formatCents(item.preco_cents))}</span>`;
+  const partes = [];
 
-    const discountBadge = hasDiscount
-      ? `<div class="discount-tag">-${Math.round((1 - item.preco_desconto_cents / item.preco_cents) * 100)}%</div>`
-      : '';
+  const destaques = (menuData.destaques || [])
+    .map((id) => menuData.itens.find((i) => i.id === id))
+    .filter(Boolean);
+  if (destaques.length > 0) {
+    partes.push(seccaoHTML('secao-destaques', 'Mais pedidos', destaques, true));
+  }
 
-    // escAttr remove parênteses: o URL entra num url(...) de CSS e sem isso poderia
-    // fechá-lo e injectar mais estilos.
-    const imgUrl = escAttr(item.imagem_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500');
+  categoriasDoMenu().forEach((cat, i) => {
+    const daCategoria = menuData.itens.filter((it) => it.categoria === cat);
+    partes.push(seccaoHTML(idParaSeccao(i), cat, daCategoria));
+  });
 
-    return `
-      <div class="product-card glass">
-        <div class="product-img" style="background-image: url('${imgUrl}')">
-          ${discountBadge}
+  container.innerHTML = partes.join('');
+  ligarBotoesDeItem(container);
+  observarSeccoes();
+}
+
+// itensFiltrados aplica a pesquisa por nome e descrição.
+function itensFiltrados() {
+  if (!termoBusca) return menuData.itens;
+
+  const t = normalizar(termoBusca);
+  return menuData.itens.filter(
+    (i) => normalizar(i.nome).includes(t) || normalizar(i.descricao || '').includes(t)
+  );
+}
+
+// normalizar remove acentos e maiúsculas.
+//
+// Sem isto, procurar "frances" não encontraria "Francesinha" e "pao" não encontraria
+// "Pão" — e é exactamente assim que as pessoas escrevem no telemóvel.
+function normalizar(texto) {
+  return String(texto)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function seccaoHTML(id, titulo, itens, destaque = false) {
+  return `
+    <section class="category-section" id="${id}">
+      <h2 class="category-title${destaque ? ' category-title-destaque' : ''}">${esc(titulo)}</h2>
+      <div class="items-grid">
+        ${itens.map(cartaoItemHTML).join('')}
+      </div>
+    </section>`;
+}
+
+// cartaoItemHTML desenha um prato.
+//
+// Texto à esquerda e imagem à direita, como nas apps de comida: o nome e o preço são o que
+// o cliente procura, e ficam alinhados na margem onde o olhar começa.
+function cartaoItemHTML(item) {
+  const temDesconto = item.desconto_ativo && item.preco_desconto_cents > 0;
+
+  const precos = temDesconto
+    ? `<span class="prod-original-price slashed">${esc(formatCents(item.preco_cents))}</span>
+       <span class="prod-discount-price">${esc(formatCents(item.preco_desconto_cents))}</span>`
+    : `<span class="prod-original-price">${esc(formatCents(item.preco_cents))}</span>`;
+
+  const badge = temDesconto
+    ? `<span class="discount-tag">-${Math.round((1 - item.preco_desconto_cents / item.preco_cents) * 100)}%</span>`
+    : '';
+
+  // Um prato sem fotografia não mostra uma imagem genérica: uma imagem de banco de
+  // imagens que não é o prato engana o cliente. O cartão fica só com texto.
+  const imagem = item.imagem_url
+    ? `<div class="product-img" style="background-image: url('${escAttr(item.imagem_url)}')"></div>`
+    : '';
+
+  return `
+    <article class="product-card" data-item="${esc(item.id)}" role="button" tabindex="0">
+      <div class="product-details">
+        <div class="product-info">
+          <h3 class="product-name">${esc(item.nome)}</h3>
+          <p class="product-desc">${esc(item.descricao || '')}</p>
         </div>
-        <div class="product-details">
-          <div class="product-info">
-            <h3 class="product-name">${esc(item.nome)}</h3>
-            <p class="product-desc">${esc(item.descricao || '')}</p>
-          </div>
-          <div class="product-footer">
-            <div class="product-price-col">
-              ${priceDisplay}
-            </div>
-            <button class="add-btn" data-adicionar="${esc(item.id)}">+</button>
-          </div>
+        <div class="product-footer">
+          <div class="product-price-col">${precos}${badge}</div>
         </div>
       </div>
-    `;
-  }).join('');
+      ${imagem}
+    </article>`;
+}
 
-  // Handlers por addEventListener: a CSP não permite onclick inline.
-  container.querySelectorAll('[data-adicionar]').forEach(b => {
-    b.addEventListener('click', () => addToCart(Number(b.dataset.adicionar)));
+// ligarBotoesDeItem torna todo o cartão tocável, e não apenas um botão "+".
+function ligarBotoesDeItem(container) {
+  container.querySelectorAll('[data-item]').forEach((card) => {
+    const abrir = () => abrirDetalhe(Number(card.dataset.item));
+    card.addEventListener('click', abrir);
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        abrir();
+      }
+    });
+  });
+}
+
+// observarSeccoes destaca na barra a categoria da secção visível.
+//
+// IntersectionObserver em vez de um listener de scroll: o listener corre a cada pixel e
+// num telemóvel isso nota-se na fluidez do rolamento.
+function observarSeccoes() {
+  if (observadorSeccoes) observadorSeccoes.disconnect();
+  if (!('IntersectionObserver' in window)) return;
+
+  const barra = document.getElementById('categories-bar');
+  const alturaBarra = barra ? barra.offsetHeight : 0;
+
+  observadorSeccoes = new IntersectionObserver(
+    (entradas) => {
+      // A secção mais acima entre as visíveis é a que conta.
+      const visiveis = entradas
+        .filter((e) => e.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (visiveis.length > 0) marcarCategoriaActiva(visiveis[0].target.id);
+    },
+    {
+      // A margem superior desconta a barra fixa, para que a secção seja considerada
+      // activa quando o seu título passa por baixo dela e não quando toca no topo do ecrã.
+      rootMargin: `-${alturaBarra + 20}px 0px -70% 0px`,
+      threshold: 0,
+    }
+  );
+
+  document
+    .querySelectorAll('.category-section')
+    .forEach((sec) => observadorSeccoes.observe(sec));
+}
+
+// --- Pesquisa ---
+
+function ligarBusca() {
+  const campo = document.getElementById('menu-busca');
+  const limpar = document.getElementById('menu-busca-limpar');
+  if (!campo) return;
+
+  let atrasado = null;
+  campo.addEventListener('input', () => {
+    // Espera curta: filtrar a cada tecla numa lista grande faz o teclado engasgar.
+    clearTimeout(atrasado);
+    atrasado = setTimeout(() => {
+      termoBusca = campo.value.trim();
+      if (limpar) limpar.hidden = termoBusca === '';
+      renderProducts();
+    }, 150);
+  });
+
+  if (limpar) {
+    limpar.addEventListener('click', () => {
+      campo.value = '';
+      termoBusca = '';
+      limpar.hidden = true;
+      renderProducts();
+      campo.focus();
+    });
+  }
+}
+
+// --- Detalhe do prato ---
+
+// abrirDetalhe mostra o painel com a descrição completa, quantidade e observações.
+function abrirDetalhe(id) {
+  const item = menuData.itens.find((i) => i.id === id);
+  if (!item) return;
+
+  itemAberto = item;
+  qtdAberta = 1;
+
+  const imagem = document.getElementById('item-detalhe-imagem');
+  if (item.imagem_url) {
+    imagem.style.backgroundImage = `url('${escAttr(item.imagem_url)}')`;
+    imagem.hidden = false;
+  } else {
+    imagem.style.backgroundImage = '';
+    imagem.hidden = true;
+  }
+
+  document.getElementById('item-detalhe-nome').textContent = item.nome;
+
+  const desc = document.getElementById('item-detalhe-descricao');
+  desc.textContent = item.descricao || '';
+  desc.hidden = !item.descricao;
+
+  document.getElementById('item-detalhe-preco').textContent =
+    formatCents(item.preco_efetivo_cents);
+
+  const obs = document.getElementById('item-detalhe-obs');
+  obs.value = '';
+  document.getElementById('item-detalhe-obs-contador').textContent = '0';
+
+  actualizarDetalhe();
+  document.getElementById('item-detalhe-overlay').classList.add('open');
+  // O foco vai para o painel para que o teclado e os leitores de ecrã sigam a abertura.
+  document.getElementById('item-detalhe-fechar').focus();
+}
+
+function fecharDetalhe() {
+  document.getElementById('item-detalhe-overlay').classList.remove('open');
+  itemAberto = null;
+}
+
+// actualizarDetalhe mantém a quantidade e o total do botão em sincronia.
+//
+// O total no próprio botão é deliberado: o cliente vê quanto vai acrescentar antes de
+// tocar, em vez de descobrir no carrinho.
+function actualizarDetalhe() {
+  if (!itemAberto) return;
+  document.getElementById('item-detalhe-qtd').textContent = String(qtdAberta);
+  document.getElementById('item-detalhe-adicionar').textContent =
+    `Adicionar · ${formatCents(itemAberto.preco_efetivo_cents * qtdAberta)}`;
+  document.getElementById('item-detalhe-menos').disabled = qtdAberta <= 1;
+}
+
+function ligarDetalhe() {
+  const overlay = document.getElementById('item-detalhe-overlay');
+  if (!overlay) return;
+
+  document.getElementById('item-detalhe-fechar').addEventListener('click', fecharDetalhe);
+
+  // Tocar fora do painel fecha, como é esperado numa folha inferior.
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) fecharDetalhe();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && overlay.classList.contains('open')) fecharDetalhe();
+  });
+
+  document.getElementById('item-detalhe-menos').addEventListener('click', () => {
+    if (qtdAberta > 1) qtdAberta--;
+    actualizarDetalhe();
+  });
+  document.getElementById('item-detalhe-mais').addEventListener('click', () => {
+    // Limite alinhado com o do servidor.
+    if (qtdAberta < 99) qtdAberta++;
+    actualizarDetalhe();
+  });
+
+  const obs = document.getElementById('item-detalhe-obs');
+  obs.addEventListener('input', () => {
+    document.getElementById('item-detalhe-obs-contador').textContent =
+      String(obs.value.length);
+  });
+
+  document.getElementById('item-detalhe-adicionar').addEventListener('click', () => {
+    if (!itemAberto) return;
+    adicionarAoCarrinho(itemAberto, qtdAberta, obs.value.trim());
+    fecharDetalhe();
   });
 }
 
 // Adiciona item ao carrinho
-function addToCart(id) {
-  const item = menuData.itens.find(i => i.id === id);
-  if (!item) return;
+// adicionarAoCarrinho junta um prato ao carrinho.
+//
+// A chave da linha inclui as observações: o mesmo prato "sem cebola" e normal são duas
+// linhas, tal como no servidor. Sem isso a instrução de um deles perdia-se.
+function adicionarAoCarrinho(item, qtd, observacoes) {
+  const chave = `${item.id}|${observacoes || ''}`;
+  const existente = cart.find((c) => c.chave === chave);
 
-  const existing = cart.find(c => c.id === id);
-  if (existing) {
-    existing.qty++;
+  if (existente) {
+    existente.qty = Math.min(99, existente.qty + qtd);
   } else {
-    // O preço efectivo (com desconto, se activo) vem resolvido do servidor.
     cart.push({
+      chave,
       id: item.id,
       nome: item.nome,
+      observacoes: observacoes || '',
+      // O preço efectivo (com desconto, se activo) vem resolvido do servidor.
       precoCents: item.preco_efetivo_cents,
       taxaBP: item.taxa_iva_bp,
-      qty: 1
+      qty: qtd,
     });
   }
-  
-  showToast(`"${item.nome}" adicionado ao carrinho!`, 'success');
+
+  showToast(`${qtd}x ${item.nome} no carrinho`, 'success');
   updateCartUI();
 }
 
 // Altera quantidade no carrinho
-function updateQty(id, delta) {
-  const index = cart.findIndex(c => c.id === id);
+function updateQty(chave, delta) {
+  const index = cart.findIndex(c => c.chave === chave);
   if (index === -1) return;
 
   cart[index].qty += delta;
@@ -266,19 +551,20 @@ function updateCartUI() {
     <div class="cart-item">
       <div class="cart-item-details">
         <div class="cart-item-name">${esc(item.nome)}</div>
+        ${item.observacoes ? `<div class="cart-item-obs">${esc(item.observacoes)}</div>` : ''}
         <div class="cart-item-price">${esc(formatCents(item.precoCents))}</div>
       </div>
       <div class="cart-item-qty">
-        <button class="qty-btn" data-qty="${esc(item.id)}" data-delta="-1">-</button>
+        <button class="qty-btn" data-qty="${escAttr(item.chave)}" data-delta="-1">−</button>
         <span>${esc(item.qty)}</span>
-        <button class="qty-btn" data-qty="${esc(item.id)}" data-delta="1">+</button>
+        <button class="qty-btn" data-qty="${escAttr(item.chave)}" data-delta="1">+</button>
       </div>
     </div>
   `).join('');
 
   itemsContainer.querySelectorAll('[data-qty]').forEach(b => {
     b.addEventListener('click', () =>
-      updateQty(Number(b.dataset.qty), Number(b.dataset.delta))
+      updateQty(b.dataset.qty, Number(b.dataset.delta))
     );
   });
 
@@ -558,7 +844,11 @@ async function submitOrderToServer() {
     cliente_telefone: document.getElementById('checkout-telefone').value.trim(),
     forma_pagamento: escolhido.value,
     troco_para_texto: trocoTexto,
-    itens: cart.map((i) => ({ menu_item_id: i.id, quantidade: i.qty })),
+    itens: cart.map((i) => ({
+      menu_item_id: i.id,
+      quantidade: i.qty,
+      observacoes: i.observacoes || '',
+    })),
   };
 
   try {
@@ -587,6 +877,9 @@ async function submitOrderToServer() {
 
 // Configura eventos gerais do cardápio
 function setupEventListeners() {
+  ligarBusca();
+  ligarDetalhe();
+
   document.getElementById('btn-checkout').addEventListener('click', openCheckoutModal);
   // A barra de carrinho em ecrã pequeno tinha um onclick inline, bloqueado pela CSP.
   const barraMovel = document.getElementById('mobile-cart-bar');

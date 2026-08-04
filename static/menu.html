@@ -20,7 +20,7 @@
         <div class="logo-icon" style="border-radius:var(--radius-sm); overflow:hidden;">·</div>
         <div class="logo-text" id="rest-title">&nbsp;</div>
       </div>
-      <a href="/" style="font-size:0.9rem; color:var(--text-muted); text-decoration:none;">Criar meu Cardápio</a>
+      <a href="/" style="font-size:0.9rem; color:var(--text-muted); text-decoration:none;">Criar o meu menu</a>
     </div>
   </header>
 
@@ -29,35 +29,44 @@
     <div>
       <!-- Banner do Restaurante -->
       <div class="restaurant-banner" id="restaurant-banner">
-        <span class="restaurant-badge">Aberto para Retirada</span>
+        <span class="restaurant-badge">Aberto para levantamento</span>
         <h1 class="restaurant-name" id="rest-name">&nbsp;</h1>
         <p id="rest-tagline" style="display:none; color:var(--text-muted); font-size:0.9rem; margin-top:0.25rem;"></p>
       </div>
 
-      <!-- Barra de Categorias -->
-      <div class="categories-bar" id="categories-bar"></div>
+      <!-- Pesquisa dentro do menu.
+           Num menu com muitas categorias, percorrer tudo para encontrar um prato é o
+           atrito mais comum. -->
+      <div class="menu-busca">
+        <span class="menu-busca-icone" aria-hidden="true">🔎</span>
+        <input type="search" id="menu-busca" class="menu-busca-campo"
+               placeholder="Procurar no menu" autocomplete="off"
+               aria-label="Procurar prato no menu">
+        <button type="button" id="menu-busca-limpar" class="menu-busca-limpar"
+                aria-label="Limpar pesquisa" hidden>&times;</button>
+      </div>
 
-      <!-- Produtos -->
-      <div class="products-container">
-        <div class="category-section">
-          <div class="items-grid" id="menu-items-container">
-            <!-- Os itens serão injetados via JS -->
-          </div>
-        </div>
+      <!-- Barra de categorias.
+           Fica fixa ao rolar e destaca a secção onde o cliente está. -->
+      <nav class="categories-bar" id="categories-bar" aria-label="Categorias do menu"></nav>
+
+      <!-- Secções por categoria. Todas visíveis; a barra acima navega entre elas. -->
+      <div class="products-container" id="menu-items-container">
+        <!-- As secções são injectadas por JS -->
       </div>
     </div>
 
     <!-- Carrinho Lateral (Desktop) -->
     <aside class="cart-sidebar glass">
       <div class="cart-title">
-        <span>Seu Pedido</span>
+        <span>A sua encomenda</span>
         <span style="font-size:0.8rem; background:var(--primary); padding:0.2rem 0.5rem; border-radius:10px;" id="cart-count-badge">0</span>
       </div>
       
       <div class="cart-items" id="cart-items">
         <div class="cart-empty">
           <div class="cart-empty-icon">🛒</div>
-          <p>Seu carrinho está vazio</p>
+          <p>O seu carrinho está vazio</p>
         </div>
       </div>
 
@@ -68,14 +77,51 @@
           <span id="subtotal-val">0,00 €</span>
         </div>
         <div class="total-row grand-total" style="margin-top:0.5rem;">
-          <span>Total (Retirada)</span>
+          <span>Total a pagar na caixa</span>
           <span id="total-val">0,00 €</span>
         </div>
       </div>
 
-      <button class="btn btn-primary" id="btn-checkout" style="width:100%;" disabled>Ir para o Checkout</button>
+      <button class="btn btn-primary" id="btn-checkout" style="width:100%;" disabled>Finalizar encomenda</button>
     </aside>
   </main>
+
+
+  <!-- Detalhe do prato.
+       Ao tocar num prato abre-se este painel, com a descrição completa, selector de
+       quantidade e campo de observações. Antes o "+" adicionava logo, sem o cliente poder
+       ver o que estava a pedir nem indicar "sem cebola". -->
+  <div class="modal-overlay" id="item-detalhe-overlay">
+    <div class="modal-card glass detalhe-card">
+      <button type="button" class="detalhe-fechar" id="item-detalhe-fechar" aria-label="Fechar">&times;</button>
+
+      <div class="detalhe-imagem" id="item-detalhe-imagem"></div>
+
+      <div class="detalhe-corpo">
+        <h2 class="detalhe-nome" id="item-detalhe-nome"></h2>
+        <p class="detalhe-descricao" id="item-detalhe-descricao"></p>
+        <div class="detalhe-preco" id="item-detalhe-preco"></div>
+
+        <div class="detalhe-campo">
+          <label for="item-detalhe-obs">Alguma indicação para a cozinha?</label>
+          <textarea id="item-detalhe-obs" class="form-control" rows="2" maxlength="280"
+                    placeholder="Ex.: sem cebola, bem passado"></textarea>
+          <span class="detalhe-contador"><span id="item-detalhe-obs-contador">0</span>/280</span>
+        </div>
+      </div>
+
+      <div class="detalhe-rodape">
+        <div class="detalhe-qtd" role="group" aria-label="Quantidade">
+          <button type="button" class="qty-btn" id="item-detalhe-menos" aria-label="Diminuir">−</button>
+          <span id="item-detalhe-qtd" aria-live="polite">1</span>
+          <button type="button" class="qty-btn" id="item-detalhe-mais" aria-label="Aumentar">+</button>
+        </div>
+        <button type="button" class="btn btn-primary detalhe-adicionar" id="item-detalhe-adicionar">
+          Adicionar
+        </button>
+      </div>
+    </div>
+  </div>
 
   <!-- Botão Flutuante do Carrinho (Celular) -->
   <div class="mobile-cart-bar active" id="mobile-cart-bar">

@@ -40,6 +40,18 @@ const maxItensPorEncomenda = 100
 type orderItemInput struct {
 	MenuItemID uint `json:"menu_item_id" binding:"required"`
 	Quantidade int  `json:"quantidade" binding:"required,gt=0,lte=99"`
+	// Observacoes é o pedido especial do cliente para esta linha: "sem cebola".
+	Observacoes string `json:"observacoes" binding:"max=280"`
+}
+
+// chaveLinha identifica uma linha da encomenda.
+//
+// Inclui as observações de propósito: o mesmo prato pedido duas vezes, uma "sem cebola" e
+// outra normal, são duas linhas distintas. Agrupar só pelo produto juntaria os dois e a
+// cozinha perderia a instrução.
+type chaveLinha struct {
+	menuItemID  uint
+	observacoes string
 }
 
 type createOrderInput struct {
@@ -111,15 +123,19 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		}
 	}
 
-	// Agrupa quantidades por produto para que o mesmo item repetido no payload não
-	// produza várias linhas na encomenda.
-	quantidades := map[uint]int{}
-	var ordem []uint
+	// Agrupa por produto E observações, para que o mesmo item repetido no payload com a
+	// mesma instrução não produza duas linhas, mas com instruções diferentes produza.
+	quantidades := map[chaveLinha]int{}
+	var ordem []chaveLinha
 	for _, item := range in.Itens {
-		if _, visto := quantidades[item.MenuItemID]; !visto {
-			ordem = append(ordem, item.MenuItemID)
+		chave := chaveLinha{
+			menuItemID:  item.MenuItemID,
+			observacoes: limparLinha(item.Observacoes, 280),
 		}
-		quantidades[item.MenuItemID] += item.Quantidade
+		if _, visto := quantidades[chave]; !visto {
+			ordem = append(ordem, chave)
+		}
+		quantidades[chave] += item.Quantidade
 	}
 
 	troco, err := in.trocoCents()
@@ -150,18 +166,25 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		// Valor bruto agrupado por taxa, para extrair o IVA de cada grupo no fim.
 		brutoPorTaxa := map[dinheiro.TaxaBP]dinheiro.Cents{}
 
-		for _, menuItemID := range ordem {
-			qtd := quantidades[menuItemID]
+		// Os produtos são lidos uma vez por id, mesmo que apareçam em várias linhas com
+		// observações diferentes.
+		produtos := map[uint]models.MenuItem{}
 
-			// O preço vem sempre da base de dados, com o tenant no filtro: o cliente não
-			// pode indicar preços nem comprar produtos de outro restaurante.
-			var mi models.MenuItem
-			if err := tx.Where("id = ? AND tenant_id = ? AND disponivel = ?",
-				menuItemID, t.ID, true).First(&mi).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return fmt.Errorf("%w: %d", errItemIndisponivel, menuItemID)
+		for _, chave := range ordem {
+			qtd := quantidades[chave]
+
+			mi, jaLido := produtos[chave.menuItemID]
+			if !jaLido {
+				// O preço vem sempre da base de dados, com o tenant no filtro: o cliente
+				// não pode indicar preços nem comprar produtos de outro restaurante.
+				if err := tx.Where("id = ? AND tenant_id = ? AND disponivel = ?",
+					chave.menuItemID, t.ID, true).First(&mi).Error; err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						return fmt.Errorf("%w: %d", errItemIndisponivel, chave.menuItemID)
+					}
+					return err
 				}
-				return err
+				produtos[chave.menuItemID] = mi
 			}
 
 			preco := mi.PrecoEfetivoCents()
@@ -171,9 +194,12 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 			total += totalLinha
 			brutoPorTaxa[mi.TaxaIVABP] += totalLinha
 
+			menuItemID := mi.ID
 			item := models.OrderItem{
-				Nome:       mi.Nome,
-				Quantidade: qtd,
+				MenuItemID:  &menuItemID,
+				Nome:        mi.Nome,
+				Observacoes: chave.observacoes,
+				Quantidade:  qtd,
 				// Snapshot da taxa: o produto pode mudar de taxa depois desta encomenda.
 				TaxaIVABP:          mi.TaxaIVABP,
 				PrecoUnitarioCents: preco,
@@ -528,6 +554,7 @@ func itensPublicos(itens []models.OrderItem) []gin.H {
 		it := &itens[i]
 		out = append(out, gin.H{
 			"nome":                 it.Nome,
+			"observacoes":          it.Observacoes,
 			"quantidade":           it.Quantidade,
 			"preco_unitario_cents": it.PrecoUnitarioCents,
 			"preco_unitario_texto": it.PrecoUnitarioCents.String(),

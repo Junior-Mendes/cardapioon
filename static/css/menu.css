@@ -92,15 +92,23 @@
    ---------------------------------------------------------------------------
    Rola na horizontal desde o início. Partir para várias linhas num telemóvel
    empurra os produtos para fora do ecrã. */
+/* A barra fica fixa ao rolar e destaca a secção onde o cliente está. Sem isto, num menu
+   longo o cliente perde a noção de onde se encontra. */
 .categories-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   flex-wrap: nowrap;
   gap: 0.5rem;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  padding-bottom: 0.5rem;
+  padding: 0.6rem 0;
   margin-bottom: 1.25rem;
   scrollbar-width: none;
+  /* Fundo opaco: sem ele o conteúdo passa por baixo e a barra fica ilegível. */
+  background: var(--bg-primary);
+  box-shadow: 0 6px 16px -8px rgba(0, 0, 0, 0.6);
 }
 
 .categories-bar::-webkit-scrollbar {
@@ -109,6 +117,9 @@
 
 .category-tab {
   flex: none;
+  /* Elemento button: precisa de reposição das margens por omissão. */
+  margin: 0;
+  font-family: inherit;
   white-space: nowrap;
   padding: 0.6rem 1rem;
   /* 44px de altura mínima: abaixo disso os erros de toque são visíveis. */
@@ -150,25 +161,50 @@
 
 .product-card {
   display: flex;
+  align-items: stretch;
   border-radius: var(--radius-md);
-  overflow: hidden;
   background: rgba(22, 30, 46, 0.4);
   border: 1px solid var(--border-color);
   transition: var(--transition);
+  /* Todo o cartão é tocável, não apenas um botão "+": é o alvo maior possível, o que
+     importa num telemóvel. */
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
+.product-card:active {
+  transform: scale(0.99);
+  border-color: var(--primary);
+}
+
+.product-card:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Imagem à direita e texto à esquerda, como nas apps de comida: o nome e o preço são o
+   que o cliente procura, e ficam alinhados na margem onde o olhar começa. A ordem no HTML
+   é texto-depois-imagem, pelo que não é preciso `order`. */
 .product-img {
   width: 96px;
+  align-self: stretch;
   flex-shrink: 0;
   background-size: cover;
   background-position: center;
   position: relative;
+  border-radius: var(--radius-sm);
+  margin: 0.6rem 0.6rem 0.6rem 0;
 }
 
+/* Um prato sem fotografia não mostra imagem nenhuma: o cartão fica só com texto, em vez
+   de uma imagem genérica que não corresponde ao prato e engana o cliente. */
+.product-card:not(:has(.product-img)) .product-details {
+  padding-right: 0.9rem;
+}
+
+/* O selo de desconto passou a viver junto ao preço, e não sobre a imagem: um prato sem
+   fotografia continua a mostrá-lo. */
 .discount-tag {
-  position: absolute;
-  top: 6px;
-  left: 6px;
   padding: 0.15rem 0.4rem;
   border-radius: var(--radius-sm);
   background: var(--danger);
@@ -620,5 +656,225 @@
 @media (min-width: 1200px) {
   .items-grid {
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+}
+
+/* ===========================================================================
+   Pesquisa no menu
+   ===========================================================================
+   Num menu com muitas categorias, percorrer tudo à procura de um prato é o
+   atrito mais comum. */
+.menu-busca {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.menu-busca-icone {
+  position: absolute;
+  left: 0.9rem;
+  font-size: 0.95rem;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.menu-busca-campo {
+  width: 100%;
+  /* 16px: abaixo disto o Safari em iOS amplia a página ao receber foco. */
+  font-size: 16px;
+  padding: 0.85rem 2.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: rgba(22, 30, 46, 0.8);
+  color: var(--text-main);
+  font-family: inherit;
+}
+
+.menu-busca-campo::placeholder {
+  color: var(--text-muted);
+}
+
+.menu-busca-campo:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+/* Esconde o X nativo do type=search, que duplica o nosso botão. */
+.menu-busca-campo::-webkit-search-cancel-button {
+  display: none;
+}
+
+.menu-busca-limpar {
+  position: absolute;
+  right: 0.5rem;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.menu-busca-limpar:hover {
+  color: #fff;
+}
+
+/* ===========================================================================
+   Títulos de secção
+   =========================================================================== */
+.category-title {
+  font-size: 1.15rem;
+  font-weight: 800;
+  margin-bottom: 0.85rem;
+  /* Compensa a barra fixa quando o browser salta para uma secção por âncora. */
+  scroll-margin-top: 4.5rem;
+}
+
+/* A secção de destaques distingue-se, porque não é uma categoria do menu mas uma leitura
+   do que os clientes mais pedem. */
+.category-title-destaque {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.category-title-destaque::before {
+  content: '🔥';
+  font-size: 1rem;
+}
+
+/* ===========================================================================
+   Observações na linha do carrinho
+   =========================================================================== */
+.cart-item-obs {
+  font-size: 0.78rem;
+  color: var(--warning);
+  overflow-wrap: anywhere;
+}
+
+/* ===========================================================================
+   Detalhe do prato
+   ===========================================================================
+   Folha inferior no telemóvel, cartão centrado em ecrã grande. O rodapé com a
+   quantidade e o botão fica sempre visível, para que o cliente não tenha de
+   rolar até ao fim para confirmar. */
+.detalhe-card {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.detalhe-fechar {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  z-index: 2;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(11, 15, 25, 0.75);
+  color: #fff;
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.detalhe-imagem {
+  width: 100%;
+  /* Proporção fixa: sem ela a altura salta conforme a imagem, o que faz o painel
+     mudar de tamanho enquanto carrega. */
+  aspect-ratio: 16 / 10;
+  background-size: cover;
+  background-position: center;
+  flex: none;
+}
+
+.detalhe-corpo {
+  padding: 1.1rem 1.1rem 0.5rem;
+  overflow-y: auto;
+}
+
+.detalhe-nome {
+  font-size: 1.2rem;
+  font-weight: 800;
+  margin-bottom: 0.4rem;
+  overflow-wrap: anywhere;
+}
+
+.detalhe-descricao {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.detalhe-preco {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #fff;
+  margin-bottom: 1rem;
+}
+
+.detalhe-campo {
+  margin-bottom: 0.75rem;
+}
+
+.detalhe-campo label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+
+.detalhe-contador {
+  display: block;
+  text-align: right;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+
+.detalhe-rodape {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.9rem 1.1rem;
+  padding-bottom: calc(0.9rem + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex: none;
+}
+
+.detalhe-qtd {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: none;
+  font-weight: 700;
+  min-width: 7rem;
+  justify-content: center;
+}
+
+.detalhe-qtd .qty-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.detalhe-adicionar {
+  flex: 1;
+  min-height: 48px;
+  font-weight: 700;
+}
+
+@media (min-width: 600px) {
+  .detalhe-card {
+    max-width: 460px;
   }
 }

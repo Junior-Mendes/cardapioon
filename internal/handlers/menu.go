@@ -3,9 +3,11 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"cardapio-online/internal/dinheiro"
 	"cardapio-online/internal/middleware"
@@ -105,7 +107,69 @@ func (h *Handler) GetPublicMenu(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"restaurante": restaurante,
 		"itens":       itensPublicos,
+		// Ids dos pratos mais pedidos, para o storefront abrir com uma secção de
+		// destaques. Vazio num restaurante sem histórico.
+		"destaques": h.idsMaisPedidos(t.ID, itens),
 	})
+}
+
+// maxDestaques limita a secção de destaques. Mais do que isto deixa de ser um destaque e
+// passa a ser uma segunda cópia do menu.
+const maxDestaques = 6
+
+// janelaDestaques é o período considerado. Trinta dias reflecte o que está a vender agora
+// sem ser tão curto que um dia atípico domine a lista.
+const janelaDestaques = 30 * 24 * time.Hour
+
+// idsMaisPedidos devolve os produtos mais vendidos, por quantidade, no período recente.
+//
+// Calculado do histórico real e não de uma marcação manual: o lojista não precisa de
+// manter nada, e a lista acompanha o que os clientes de facto pedem. Num restaurante novo
+// devolve vazio, e o storefront omite a secção — uma secção "mais pedidos" vazia, ou
+// preenchida com pratos ao acaso, seria pior do que não existir.
+func (h *Handler) idsMaisPedidos(tenantID uint, disponiveis []models.MenuItem) []uint {
+	// Só produtos actualmente disponíveis podem ser destacados.
+	disponivel := make(map[uint]bool, len(disponiveis))
+	for i := range disponiveis {
+		disponivel[disponiveis[i].ID] = true
+	}
+	if len(disponivel) == 0 {
+		return []uint{}
+	}
+
+	type linha struct {
+		MenuItemID uint
+		Total      int
+	}
+	var linhas []linha
+
+	// Encomendas canceladas não contam: não representam procura satisfeita.
+	err := h.DB.Table("itens_pedido AS i").
+		Select("i.menu_item_id AS menu_item_id, SUM(i.quantidade) AS total").
+		Joins("JOIN pedidos p ON p.id = i.pedido_id").
+		Where("p.tenant_id = ? AND p.created_at >= ? AND p.status <> ? AND i.menu_item_id IS NOT NULL",
+			tenantID, time.Now().Add(-janelaDestaques), models.StatusCancelado).
+		Group("i.menu_item_id").
+		Order("total DESC").
+		Limit(maxDestaques * 3). // margem para descartar os que já não estão disponíveis
+		Scan(&linhas).Error
+	if err != nil {
+		// Os destaques são um extra: uma falha aqui não deve impedir o menu de carregar.
+		slog.Error("falha ao calcular destaques do menu", "tenant_id", tenantID, "erro", err)
+		return []uint{}
+	}
+
+	ids := make([]uint, 0, maxDestaques)
+	for _, l := range linhas {
+		if !disponivel[l.MenuItemID] {
+			continue
+		}
+		ids = append(ids, l.MenuItemID)
+		if len(ids) == maxDestaques {
+			break
+		}
+	}
+	return ids
 }
 
 type menuItemInput struct {
