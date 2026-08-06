@@ -100,8 +100,55 @@ self.addEventListener('fetch', (evento) => {
   );
 });
 
-// --- Espaço reservado para Web Push ---
-//
-// O passo seguinte acrescenta aqui os listeners 'push' e 'notificationclick'. Ficam de fora
-// por agora de propósito: pedir permissão de notificações antes de existir algo para
-// notificar gasta a única oportunidade de a pedir — quem recusa não volta a ser perguntado.
+// --- Web Push ---
+
+self.addEventListener('push', (evento) => {
+  let dados = {};
+  try {
+    dados = evento.data.json();
+  } catch (err) {
+    dados = {
+      title: 'Nova Encomenda!',
+      body: evento.data ? evento.data.text() : 'Chegou uma nova encomenda!',
+    };
+  }
+
+  const opcoes = {
+    body: dados.body,
+    icon: '/static/icons/icone-192.png',
+    badge: '/static/icons/icone-192.png',
+    tag: dados.tag || 'nova-encomenda',
+    renotify: true,
+    data: dados.data || {},
+  };
+
+  evento.waitUntil(
+    self.registration.showNotification(dados.title, opcoes)
+  );
+});
+
+self.addEventListener('notificationclick', (evento) => {
+  evento.notification.close();
+
+  const url = (evento.notification.data && evento.notification.data.url) || '/admin';
+
+  evento.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientes) => {
+      // Se houver uma aba aberta, foca nela e navega para a URL
+      for (const cliente of clientes) {
+        const clienteUrl = new URL(cliente.url);
+        if (clienteUrl.pathname === url || clienteUrl.pathname === '/admin') {
+          return cliente.focus().then((c) => {
+            if (c.url !== clienteUrl.origin + url) {
+              return c.navigate(url);
+            }
+          });
+        }
+      }
+      // Se não houver, abre uma nova aba
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(url);
+      }
+    })
+  );
+});

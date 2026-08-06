@@ -23,6 +23,12 @@ por link.
 categorias com pausa de um toque, identidade visual própria (logótipo, cores), upload de
 fotografias do telemóvel, e painel instalável como aplicação.
 
+**Para quem opera a plataforma** — consola em `/plataforma` com os indicadores do negócio,
+listagem dos restaurantes clientes com métricas de cada um, detalhe da conta, suspensão e
+reactivação, link de recuperação de senha para o lojista, e leitura da auditoria de todos os
+restaurantes. É um sistema de contas separado do dos lojistas: nenhum token de restaurante
+abre esta consola, nem o contrário.
+
 **Âmbito do MVP:** levantamento ao balcão com pagamento na caixa. Sem entrega, sem pagamento
 na aplicação, sem emissão de facturas — decisões deliberadas, explicadas no `AGENTS.md`.
 
@@ -60,6 +66,11 @@ chown -R 100:101 traefik_dynamic uploads
 ```
 
 Depois, cria o primeiro restaurante no formulário da página inicial.
+
+Para a consola da plataforma, define `PLATAFORMA_ADMIN_EMAIL` e
+`PLATAFORMA_ADMIN_PASSWORD` no `.env` antes do primeiro arranque. A conta é criada uma única
+vez; depois disso as variáveis são ignoradas, e a senha muda-se no próprio painel. O
+arranque falha se a senha for fraca — esta conta vê todos os clientes.
 
 ### Variáveis essenciais
 

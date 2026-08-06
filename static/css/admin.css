@@ -371,7 +371,7 @@ input:checked + .slider:before {
   right: 0;
   bottom: 0;
   background: rgba(0, 0, 0, 0.7);
-  z-index: 1000;
+  z-index: 2000;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -795,5 +795,260 @@ input:checked + .slider:before {
 @media (prefers-reduced-motion: reduce) {
   .btn-som.som-pendente {
     animation: none;
+  }
+}
+
+/* ===========================================================================
+   Estilos de Responsividade Mobile
+   =========================================================================== */
+
+/* Classes de grid responsivas */
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.form-grid-2-name-cat {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 1rem;
+}
+
+.color-picker-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Defaults para Mobile Elements no Desktop */
+.admin-mobile-header {
+  display: none;
+}
+.kanban-tabs-container {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  /* Layout Geral */
+  .admin-container {
+    flex-direction: column;
+    padding-top: 60px; /* Espaço para a barra de topo fixa */
+  }
+
+  .main-content {
+    padding: 1.25rem 1rem;
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  /* Topbar para Mobile */
+  .admin-mobile-header {
+    display: flex;
+    align-items: center;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 60px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    padding: 0 1rem;
+    z-index: 1000;
+  }
+
+  .btn-menu-toggle {
+    background: none;
+    border: none;
+    color: var(--text-main);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 0.75rem;
+  }
+
+  .mobile-logo {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .mobile-logo .logo-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 1.1rem;
+    border-radius: var(--radius-sm);
+  }
+
+  .mobile-logo .logo-text {
+    font-size: 1.1rem;
+  }
+
+  /* Backdrop para Mobile Drawer */
+  .sidebar-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 1001;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+
+  .sidebar-backdrop.active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Sidebar Navigation Drawer */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    background: var(--bg-primary);
+    z-index: 1002;
+    transform: translateX(-100%);
+    transition: var(--transition);
+    height: 100vh;
+    box-shadow: none;
+    border-right: 1px solid var(--border-color);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+    box-shadow: 10px 0 30px rgba(0, 0, 0, 0.5);
+  }
+
+  /* Header das Secções */
+  .admin-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .admin-header .admin-title {
+    margin-bottom: 0.25rem;
+  }
+
+  .admin-header button,
+  .admin-header .estado-tempo-real {
+    width: 100%;
+    text-align: center;
+    justify-content: center;
+  }
+
+  /* Kanban de Pedidos no Mobile */
+  .kanban-tabs-container {
+    display: flex;
+    overflow-x: auto;
+    gap: 0.4rem;
+    margin-bottom: 1.25rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+    scrollbar-width: none; /* Firefox */
+  }
+
+  .kanban-tabs-container::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
+  }
+
+  .kanban-tab-btn {
+    flex: 1;
+    min-width: 85px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.6rem 0.4rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+    white-space: nowrap;
+  }
+
+  .kanban-tab-btn.active {
+    background: rgba(255, 71, 87, 0.1);
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .kanban-tab-btn .tab-count {
+    background: var(--bg-tertiary);
+    padding: 0.1rem 0.4rem;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    margin-top: 0.15rem;
+    font-weight: 700;
+  }
+
+  .kanban-tab-btn.active .tab-count {
+    background: var(--primary);
+    color: #fff;
+  }
+
+  .board-container {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .board-column {
+    display: none;
+    min-height: auto;
+    padding: 0;
+    background: none !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  .board-column.active {
+    display: block;
+  }
+
+  /* Tabelas */
+  .admin-table {
+    min-width: 600px;
+  }
+
+  /* Modais */
+  .modal-card {
+    max-width: 92% !important;
+    padding: 1.25rem;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+
+  .form-grid-2,
+  .form-grid-2-name-cat {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  /* Ajuste das Configurações Gerais no Mobile */
+  #config-rest-domain {
+    width: 100%;
+    flex: none;
+  }
+  
+  #btn-save-domain, 
+  #btn-check-dns {
+    flex: 1;
+    justify-content: center;
   }
 }

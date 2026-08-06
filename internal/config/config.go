@@ -47,11 +47,26 @@ type Config struct {
 	// Operação
 	SeedDemoData   bool
 	TrustedProxies []string
+
+	// Web Push
+	VAPIDPublicKey  string
+	VAPIDPrivateKey string
+
+	// Painel da plataforma. Usados uma única vez, para criar a primeira conta de quem
+	// opera o SaaS: depois de existir uma conta, estas variáveis são ignoradas, para que
+	// um reinício não reponha uma senha já mudada no painel.
+	PlataformaAdminEmail    string
+	PlataformaAdminPassword string
 }
 
 // DevMode indica ambiente de desenvolvimento. Controla CORS para localhost, HSTS e o
 // nível de detalhe dos erros devolvidos ao cliente.
 func (c *Config) DevMode() bool { return c.GinMode != "release" }
+
+// WebPushConfigured indica se as chaves VAPID necessárias para o Web Push estão presentes.
+func (c *Config) WebPushConfigured() bool {
+	return c.VAPIDPublicKey != "" && c.VAPIDPrivateKey != ""
+}
 
 // LoadConfig lê o ambiente e valida o que é obrigatório.
 //
@@ -86,6 +101,12 @@ func LoadConfig() (*Config, error) {
 		TraefikInternalAddr: getEnv("TRAEFIK_INTERNAL_ADDR", "cardapio_traefik:443"),
 
 		SeedDemoData: getEnvBool("SEED_DEMO_DATA", false),
+
+		VAPIDPublicKey:  getEnv("VAPID_PUBLIC_KEY", ""),
+		VAPIDPrivateKey: getEnv("VAPID_PRIVATE_KEY", ""),
+
+		PlataformaAdminEmail:    strings.ToLower(getEnv("PLATAFORMA_ADMIN_EMAIL", "")),
+		PlataformaAdminPassword: getEnv("PLATAFORMA_ADMIN_PASSWORD", ""),
 	}
 
 	if p := getEnv("TRUSTED_PROXIES", ""); p != "" {

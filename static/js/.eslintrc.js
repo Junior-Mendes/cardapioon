@@ -33,6 +33,7 @@ const partilhados = {
   registarServiceWorker: 'readonly',
   prepararInstalacao: 'readonly',
   instalarApp: 'readonly',
+  inicializarSubscricaoPush: 'readonly',
 };
 
 module.exports = {
@@ -68,6 +69,19 @@ module.exports = {
       // branding.js, que os DEFINEM, declará-los faria o lint acusar redeclaração.
       files: ['admin.js', 'menu.js', 'order.js', 'landing.js', 'reset.js'],
       globals: partilhados,
+    },
+    {
+      // plataforma.js é a consola do dono do SaaS. Consome só os utilitários de common.js:
+      // tem sessão e cliente de API próprios, porque partilhar as chaves de localStorage
+      // com o painel do lojista faria uma sessão substituir a outra no mesmo browser.
+      files: ['plataforma.js'],
+      globals: {
+        esc: 'readonly',
+        escAttr: 'readonly',
+        formatCents: 'readonly',
+        formatDateTime: 'readonly',
+        showToast: 'readonly',
+      },
     },
     {
       // common.js define toda a API partilhada e não consome nada dela, pelo que não

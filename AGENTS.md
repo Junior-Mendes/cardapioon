@@ -98,6 +98,7 @@ static/
   menu.html    Menu do cliente      + js/menu.js   + css/menu.css  (MOBILE-FIRST)
   order.html   Acompanhar encomenda + js/order.js
   admin.html   Painel do lojista    + js/admin.js  + css/admin.css
+  plataforma.html  Painel do dono do SaaS + js/plataforma.js + css/plataforma.css
   js/common.js   API partilhada: esc, api, Sessao, formatCents, SegGroup
   js/alertas.js  Som, título do separador, stream SSE, PWA
   js/branding.js White label no storefront
@@ -124,6 +125,31 @@ falhar, o problema é o teu código, não o teste.
 
 Historicamente o tenant era resolvido pelo `Host` **antes** do token, e um lojista
 autenticado que abrisse o subdomínio de um concorrente operava na conta dele.
+
+### 4.1.1 O painel da plataforma é outro realm de autenticação
+
+O painel do dono do SaaS (`/plataforma`) é a única parte da aplicação que lê os dados de
+vários restaurantes. **Não é uma role nova**: é um sistema de contas paralelo.
+
+- Contas em `plataforma_admins`, sessões em `plataforma_refresh_tokens`. Nenhuma das duas
+  tem `tenant_id`.
+- Os tokens dos dois painéis têm **audiências diferentes** (`admin` e `plataforma`).
+  `ParseAccessToken` exige a primeira, `ParsePlataformaToken` a segunda, pelo que cada
+  validador rejeita o token do outro na verificação da assinatura — antes de qualquer
+  handler correr.
+- `RequirePlataforma` **nunca** escreve `tenant_id`, `user_id` nem `role` no contexto. Se um
+  handler da plataforma chamar `TenantScope` por engano, o tenant é zero e a query filtra
+  por `1 = 0`: ecrã vazio, nunca os dados do restaurante errado.
+- Rotas em `/api/plataforma/*`, nunca em `/api/admin/*`.
+
+**Não unifiques as duas funções de parse nem acrescentes um `role: superadmin` a
+`usuarios`.** Uma role que ignorasse o escopo de tenant tornaria a invariante 4.1 —
+que hoje não tem excepções — condicional a um `if` espalhado por cada handler
+administrativo. `TestTokenDeLojistaNaoAbrePainelDaPlataforma` e
+`TestTokenDaPlataformaNaoAbreRotasAdministrativas` cobrem as duas direcções.
+
+Minimização de dados: o painel mostra contagens, volumes e estados, mas **não** o nome nem
+o telefone dos consumidores finais. O responsável por esses dados é o restaurante.
 
 ### 4.2 Dinheiro
 
@@ -231,6 +257,8 @@ ordem no arranque; `schema_migrations` registra o que já foi aplicado.
 | `refresh_tokens` | Sessões, com rotação e detecção de reutilização |
 | `password_resets` | Tokens de uso único, guardados como hash |
 | `audit_logs` | Acções administrativas sensíveis |
+| `plataforma_admins` | Contas de quem opera o SaaS. Sem `tenant_id`, de propósito (ver 4.1.1) |
+| `plataforma_refresh_tokens` | Sessões do painel da plataforma, com a mesma rotação |
 | `schema_migrations` | Controlo de migrações |
 
 Ao criar uma migração: numera em sequência, escreve-a **idempotente quando possível**, e
@@ -279,6 +307,29 @@ DELETE /api/admin/usuarios/:id          (admin+)
 Hierarquia de papéis: `funcionario` < `gerente` < `admin` < `owner`. Só um `owner` pode
 criar outro `owner`.
 
+Painel da plataforma (`Authorization: Bearer <jwt de audiência "plataforma">`). Realm de
+autenticação separado — ver 4.1.1:
+
+```
+POST  /api/plataforma/login | refresh | logout
+GET   /api/plataforma/eu
+POST  /api/plataforma/conta/alterar-senha
+GET   /api/plataforma/resumo                  Indicadores de toda a plataforma
+GET   /api/plataforma/restaurantes            ?q=&estado=&ordem=&pagina=&por_pagina=
+GET   /api/plataforma/restaurantes/:id        Detalhe, equipa e métricas
+PATCH /api/plataforma/restaurantes/:id/estado Suspender ou reactivar
+POST  /api/plataforma/restaurantes/:id/recuperacao  Link de reset para o proprietário
+GET   /api/plataforma/auditoria               ?tenant_id=&acao=
+```
+
+`ordem` aceita `recentes|nome|volume|encomendas|actividade` **por lista branca**: o valor
+entra numa cláusula `ORDER BY`, que não aceita parâmetros preparados.
+
+Suspender um restaurante põe `ativo = false`, apaga a rota do Traefik e revoga os refresh
+tokens da equipa. O storefront passa a dar 404 (`porSlug` filtra por `ativo`) e o login
+responde «conta suspensa». **É reversível de propósito**: apagar os dados de um cliente por
+uma factura em atraso destrói o histórico de IVA que ele é obrigado a conservar.
+
 Estados de encomenda, com transições restritas:
 `pendente → preparando → pronto → finalizado`, e `cancelado` a partir de qualquer activo.
 Saltar etapas ou reabrir uma encomenda terminada devolve 409.
@@ -306,15 +357,20 @@ porque é a autoridade. Nunca só num.
 **Mobile-first apenas em `menu.css`**, que é o ecrã do cliente e é usado no telemóvel: as
 regras sem media query são as do telemóvel e as `min-width` só acrescentam.
 `admin.css` é desktop-first de propósito — o lojista usa computador ou tablet ao balcão.
-Não inviertas nenhum dos dois sem intenção.
+`plataforma.css` também: é uma consola de tabelas, usada num computador.
+Não inviertas nenhum dos três sem intenção.
 
 ---
 
 ## 9. Estado e próximos passos
 
-Em produção. Cinco migrações aplicadas, lint limpo, e **81 funções de teste**: auth 12,
-dinheiro 11, handlers 27, imagens 10, validate 12, traefik 6, db 3. (O total de linhas
+Em produção. Sete migrações aplicadas, lint limpo, e **90 funções de teste**: auth 12,
+dinheiro 11, handlers 36, imagens 10, validate 12, traefik 6, db 3. (O total de linhas
 `--- PASS` é maior, porque alguns testes têm subtestes.)
+
+O painel da plataforma (`/plataforma`) cobre ver e gerir clientes: indicadores, listagem com
+métricas, detalhe, suspensão e reactivação, link de recuperação para o lojista, e leitura
+transversal da auditoria.
 
 A seguir, por ordem de valor:
 
@@ -325,9 +381,16 @@ A seguir, por ordem de valor:
 4. **WhatsApp via Evolution API** — dispensa a verificação na Meta, mas é via não oficial:
    usa um número dedicado, porque há risco de bloqueio.
 5. **Modificadores de produto** (tamanhos, adicionais) — impeditivo para pizzarias.
-6. **Billing de assinatura** — é o que torna isto num negócio.
-7. **Migração 0006** para remover as colunas `DECIMAL` legadas, quando a estabilidade o
-   permitir.
+6. **Billing de assinatura** — é o que torna isto num negócio. O painel da plataforma já dá
+   a suspensão manual, que é a alavanca de cobrança; falta o plano, o estado da subscrição e
+   a ligação ao processador de pagamentos.
+7. **Migração para remover as colunas `DECIMAL` legadas**, quando a estabilidade o permitir.
+
+Deliberadamente **fora** do painel da plataforma, e não por esquecimento: apagar
+restaurantes (a suspensão é reversível, apagar destrói o histórico de IVA do cliente) e
+entrar na conta de um lojista por impersonação (útil no suporte, mas é uma via de acesso aos
+dados dos consumidores que hoje não existe; se for feita, tem de ser consentida pelo
+lojista, limitada no tempo e auditada).
 
 Dívida técnica conhecida: a árvore de rotas está duplicada entre `main.go` e o teste de
 isolamento; `db.DB` global ainda existe a par da injecção por `Deps`; os ficheiros estáticos

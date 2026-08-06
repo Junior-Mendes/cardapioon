@@ -305,6 +305,9 @@ func (h *Handler) CreateOrder(c *gin.Context) {
 		"forma_pagamento":   pedido.FormaPagamento,
 	})
 
+	// Envia notificações push aos lojistas registados
+	go h.EnviarPushNovaEncomenda(t.ID, &pedido)
+
 	c.JSON(http.StatusCreated, respostaEncomendaCriada(&pedido))
 }
 

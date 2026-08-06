@@ -52,7 +52,9 @@ func (h *Handler) GetConfig(c *gin.Context) {
 
 		// Identidade visual
 		"logo_url":                 t.LogoURL,
+		"iniciais":                 iniciaisDe(t.Nome),
 		"cor_primaria":             t.CorPrimaria,
+		"cor_texto_sobre_primaria": validate.TextoSobreCor(t.CorPrimaria),
 		"cor_secundaria":           t.CorSecundaria,
 		"descricao_curta":          t.DescricaoCurta,
 		"mostrar_marca_plataforma": t.MostrarMarcaPlataforma,

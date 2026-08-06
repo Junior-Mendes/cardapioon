@@ -1,0 +1,710 @@
+/* Consola da plataforma — o painel de quem opera o SaaS.
+ *
+ * Desktop-first, como admin.css e pela mesma razão: este ecrã é usado num computador, a
+ * olhar para tabelas de clientes. As media queries só reduzem para tablet.
+ *
+ * Ficheiro próprio, e não regras acrescentadas a admin.css: as duas páginas têm layouts
+ * diferentes e partilhar o ficheiro faria com que um ajuste no painel do lojista mexesse
+ * aqui sem ninguém dar por isso.
+ */
+
+/* O atributo hidden tem de vencer os display: flex e grid definidos abaixo. */
+[hidden] {
+  display: none !important;
+}
+
+/* --- Marca --- */
+
+.p-logo-icon {
+  background: var(--primary);
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  color: #fff;
+  font-size: 1.15rem;
+  flex-shrink: 0;
+}
+
+.p-logo-sufixo {
+  color: var(--primary);
+  font-weight: 800;
+}
+
+.p-login-marca {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+
+/* --- Entrada --- */
+
+.p-login {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: var(--bg-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.p-login-card {
+  width: 100%;
+  max-width: 400px;
+  padding: 2rem;
+  border-radius: var(--radius-md);
+}
+
+.p-login-sub,
+.p-conta-email {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.p-login-card form {
+  margin-top: 1.75rem;
+}
+
+.p-btn-bloco {
+  width: 100%;
+  margin-top: 1.5rem;
+}
+
+.p-login-nota {
+  margin-top: 1.5rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.p-login-nota a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+/* --- Estrutura --- */
+
+.p-app {
+  display: flex;
+  min-height: 100vh;
+}
+
+.p-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-color);
+  padding: 1.75rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.p-conta {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.p-conta-etiqueta {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.p-conta strong,
+.p-conta-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.p-nav {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.p-nav-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.75rem 0.9rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.p-nav-btn:hover,
+.p-nav-btn.activo {
+  background: rgba(255, 71, 87, 0.1);
+  color: var(--primary);
+}
+
+.p-sidebar-fundo {
+  margin-top: auto;
+  border-top: 1px solid var(--border-color);
+  padding-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.p-main {
+  flex: 1;
+  min-width: 0;
+  padding: 2rem 2.5rem;
+  max-height: 100vh;
+  overflow-y: auto;
+}
+
+.p-cabecalho {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1rem;
+  margin-bottom: 1.75rem;
+}
+
+.p-cabecalho h1 {
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+
+.p-cabecalho p {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin-top: 0.15rem;
+}
+
+/* --- Indicadores --- */
+
+.p-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.p-kpi {
+  padding: 1.15rem 1.25rem;
+  border-radius: var(--radius-md);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+}
+
+.p-kpi-etiqueta {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.p-kpi-valor {
+  font-size: 1.7rem;
+  font-weight: 800;
+  letter-spacing: -1px;
+  margin-top: 0.35rem;
+  /* Números tabulares: sem isto, as colunas de dígitos dançam ao actualizar. */
+  font-variant-numeric: tabular-nums;
+}
+
+.p-kpi-nota {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-top: 0.15rem;
+}
+
+/* --- Cartões --- */
+
+.p-cartao {
+  border-radius: var(--radius-md);
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.p-cartao-topo {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.p-cartao-topo h2 {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.p-legenda {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.p-link {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* --- Gráfico de barras --- */
+
+.p-grafico {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  height: 160px;
+}
+
+.p-barra-coluna {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.45rem;
+  height: 100%;
+  min-width: 0;
+}
+
+.p-barra {
+  width: 100%;
+  border-radius: 4px 4px 0 0;
+  background: linear-gradient(180deg, var(--primary) 0%, rgba(255, 71, 87, 0.45) 100%);
+  /* Um dia com zero encomendas fica com um traço visível em vez de desaparecer: sem isto,
+     não se distingue "nenhuma encomenda" de "coluna em falta". */
+  min-height: 2px;
+  transition: var(--transition);
+}
+
+.p-barra-coluna:hover .p-barra {
+  background: var(--primary-hover);
+}
+
+.p-barra-dia {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --- Filtros --- */
+
+.p-filtros {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-end;
+  padding: 1.15rem 1.25rem;
+  border-radius: var(--radius-md);
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.p-filtro-busca {
+  flex: 1;
+  min-width: 220px;
+}
+
+.p-etiqueta {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.4rem;
+}
+
+/* --- Tabelas --- */
+
+.p-tabela-envolvente {
+  /* A tabela é larga: o scroll acontece dentro do cartão, e o corpo da página nunca
+     ganha barra horizontal. */
+  overflow-x: auto;
+}
+
+.p-tabela {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.p-tabela th {
+  text-align: left;
+  padding: 0.6rem 0.85rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.p-tabela td {
+  padding: 0.8rem 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: middle;
+}
+
+.p-tabela tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.p-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.p-tabela-clicavel tbody tr {
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.p-tabela-clicavel tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.p-celula-principal strong {
+  display: block;
+}
+
+.p-celula-secundaria {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.p-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.p-vazio {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 2.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+/* --- Etiquetas de estado --- */
+
+.p-selo {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.p-selo-activo {
+  background: rgba(46, 213, 115, 0.15);
+  color: var(--success);
+}
+
+.p-selo-suspenso {
+  background: rgba(255, 71, 87, 0.15);
+  color: var(--primary);
+}
+
+.p-selo-neutro {
+  background: rgba(164, 176, 190, 0.15);
+  color: var(--text-muted);
+}
+
+.p-selo-aviso {
+  background: rgba(255, 165, 2, 0.15);
+  color: var(--warning);
+}
+
+.p-selo-info {
+  background: rgba(30, 144, 255, 0.15);
+  color: var(--info);
+}
+
+/* --- Paginação --- */
+
+.p-paginacao {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding-top: 1.15rem;
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.p-paginacao:empty {
+  display: none;
+}
+
+.p-paginacao-botoes {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.p-btn-pagina {
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.p-btn-pagina:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.p-btn-pagina:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* --- Gaveta de detalhe --- */
+
+.p-gaveta-fundo {
+  position: fixed;
+  inset: 0;
+  z-index: 800;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.p-gaveta {
+  width: min(620px, 100%);
+  height: 100%;
+  overflow-y: auto;
+  padding: 2rem;
+  border-radius: 0;
+  border-right: none;
+  animation: entrarDaDireita 0.25s ease;
+}
+
+@keyframes entrarDaDireita {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.p-gaveta-topo {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.p-gaveta-topo h2 {
+  font-size: 1.4rem;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+
+.p-fechar {
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  width: 34px;
+  height: 34px;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: var(--transition);
+}
+
+.p-fechar:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.p-secao {
+  margin-top: 1.75rem;
+}
+
+.p-secao h3 {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 0.85rem;
+}
+
+.p-pares {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.9rem 1.25rem;
+}
+
+.p-par-etiqueta {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.p-par-valor {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+
+.p-acoes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.p-btn-perigo {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+.p-btn-perigo:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.p-aviso {
+  background: rgba(255, 165, 2, 0.08);
+  border: 1px solid rgba(255, 165, 2, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem 1rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* --- Modal --- */
+
+.p-modal-fundo {
+  position: fixed;
+  inset: 0;
+  z-index: 850;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.p-modal {
+  width: 100%;
+  max-width: 420px;
+  padding: 1.75rem;
+  border-radius: var(--radius-md);
+}
+
+.p-modal h2 {
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+.p-modal-sub {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 0.35rem 0 1.5rem;
+  line-height: 1.5;
+}
+
+.p-modal-acoes {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  border-top: 1px solid var(--border-color);
+  padding-top: 1.25rem;
+  margin-top: 1.5rem;
+}
+
+/* --- Tablet --- */
+
+@media (max-width: 900px) {
+  .p-app {
+    flex-direction: column;
+  }
+
+  .p-sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+  }
+
+  .p-conta {
+    display: none;
+  }
+
+  .p-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .p-sidebar-fundo {
+    margin-top: 0;
+    border-top: none;
+    padding-top: 0;
+    flex-direction: row;
+    margin-left: auto;
+  }
+
+  .p-main {
+    max-height: none;
+    padding: 1.5rem 1.25rem;
+  }
+
+  .p-gaveta {
+    width: 100%;
+    padding: 1.5rem;
+  }
+}

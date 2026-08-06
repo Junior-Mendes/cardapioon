@@ -343,3 +343,130 @@ async function instalarApp() {
     showToast('Painel instalado. Pode abri-lo a partir do ecrã principal.', 'success');
   }
 }
+
+// --- Web Push ---
+
+let pushInicializado = false;
+
+async function inicializarSubscricaoPush() {
+  if (pushInicializado) return;
+
+  const btnPush = document.getElementById('btn-push');
+  if (!btnPush) return;
+
+  const suportado = 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
+  if (!suportado) {
+    btnPush.style.display = 'none';
+    return;
+  }
+
+  if (!Sessao.temSessao()) return;
+
+  // Verificar se o servidor suporta Web Push (chave pública configurada)
+  let chavePublica;
+  try {
+    const dados = await api('/api/admin/push/chave-publica');
+    chavePublica = dados.public_key;
+  } catch (err) {
+    // Web Push não configurado ou erro na rota
+    btnPush.style.display = 'none';
+    return;
+  }
+
+  pushInicializado = true;
+  btnPush.hidden = false;
+  btnPush.style.display = '';
+  actualizarEstadoBotaoPush();
+
+  btnPush.addEventListener('click', async () => {
+    if (Notification.permission === 'denied') {
+      showToast('Permissão de notificações negada. Ative-as nas configurações do navegador.', 'warning');
+      return;
+    }
+
+    const reg = await navigator.serviceWorker.ready;
+    const subExistente = await reg.pushManager.getSubscription();
+
+    if (subExistente) {
+      // Cancelar subscrição
+      try {
+        await api('/api/admin/push/cancelar', {
+          metodo: 'POST',
+          corpo: { endpoint: subExistente.endpoint },
+        });
+        await subExistente.unsubscribe();
+        showToast('Notificações desativadas.', 'info');
+        actualizarEstadoBotaoPush();
+      } catch (err) {
+        showToast('Erro ao desativar notificações.', 'danger');
+      }
+    } else {
+      // Subscrever
+      try {
+        const permissao = await Notification.requestPermission();
+        if (permissao !== 'granted') {
+          showToast('Permissão de notificações recusada.', 'warning');
+          return;
+        }
+
+        const chaveConvertida = urlB64ToUint8Array(chavePublica);
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: chaveConvertida,
+        });
+
+        // Enviar para o servidor
+        await api('/api/admin/push/subscrever', {
+          metodo: 'POST',
+          corpo: sub,
+        });
+
+        showToast('Notificações no telemóvel ativadas!', 'success');
+        actualizarEstadoBotaoPush();
+      } catch (err) {
+        console.error('Erro ao subscrever push:', err);
+        showToast('Erro ao ativar notificações.', 'danger');
+      }
+    }
+  });
+}
+
+async function actualizarEstadoBotaoPush() {
+  const btnPush = document.getElementById('btn-push');
+  if (!btnPush) return;
+
+  if (Notification.permission === 'denied') {
+    btnPush.innerText = '📳 Bloqueadas';
+    btnPush.classList.add('btn-secondary');
+    btnPush.classList.remove('btn-success');
+    return;
+  }
+
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+
+  if (sub) {
+    btnPush.innerText = '📳 Desativar Alertas';
+    btnPush.classList.add('btn-success');
+    btnPush.classList.remove('btn-secondary');
+  } else {
+    btnPush.innerText = '📳 Notificações Móveis';
+    btnPush.classList.add('btn-secondary');
+    btnPush.classList.remove('btn-success');
+  }
+}
+
+function urlB64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding)
+    .replace(/-/g, '+')
+    .replace(/_/g, '/');
+
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}

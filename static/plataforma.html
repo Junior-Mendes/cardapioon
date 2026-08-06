@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Painel da Plataforma — Gestão de Clientes</title>
+  <!-- Sem manifest nem service worker: este painel não é para instalar no telemóvel, e o
+       service worker de /sw.js controla /admin, não esta página. -->
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#0b0f19">
+  <link rel="icon" href="/static/icons/icone-192.png">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/plataforma.css">
+</head>
+<body>
+
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Entrada. Fica visível até haver sessão válida. -->
+  <div class="p-login" id="login-overlay">
+    <div class="p-login-card glass">
+      <div class="p-login-marca">
+        <div class="p-logo-icon">C</div>
+        <div>
+          <strong>Cardápio</strong><span class="p-logo-sufixo">Plataforma</span>
+          <p class="p-login-sub">Consola de gestão de clientes</p>
+        </div>
+      </div>
+
+      <form id="login-form" autocomplete="on">
+        <div class="form-group">
+          <label for="login-email">Email</label>
+          <input type="email" id="login-email" class="form-control" required
+                 autocomplete="username" placeholder="dono@plataforma.pt">
+        </div>
+        <div class="form-group" style="margin-top:1rem;">
+          <label for="login-password">Senha</label>
+          <input type="password" id="login-password" class="form-control" required
+                 autocomplete="current-password" placeholder="A sua senha">
+        </div>
+        <button type="submit" class="btn btn-primary p-btn-bloco" id="login-btn">Entrar</button>
+      </form>
+
+      <p class="p-login-nota">
+        Este acesso é reservado a quem opera a plataforma. Se é responsável por um
+        restaurante, use o <a href="/admin">painel do seu restaurante</a>.
+      </p>
+    </div>
+  </div>
+
+  <!-- Consola. -->
+  <div class="p-app" id="app" hidden>
+
+    <aside class="p-sidebar">
+      <div class="p-login-marca">
+        <div class="p-logo-icon">C</div>
+        <div>
+          <strong>Cardápio</strong><span class="p-logo-sufixo">Plataforma</span>
+        </div>
+      </div>
+
+      <div class="p-conta">
+        <span class="p-conta-etiqueta">Sessão</span>
+        <strong id="admin-nome">—</strong>
+        <span class="p-conta-email" id="admin-email"></span>
+      </div>
+
+      <nav>
+        <ul class="p-nav" id="nav">
+          <li><button type="button" class="p-nav-btn activo" data-vista="resumo">
+            <span aria-hidden="true">📊</span> Resumo</button></li>
+          <li><button type="button" class="p-nav-btn" data-vista="restaurantes">
+            <span aria-hidden="true">🏪</span> Restaurantes</button></li>
+          <li><button type="button" class="p-nav-btn" data-vista="auditoria">
+            <span aria-hidden="true">🧾</span> Auditoria</button></li>
+        </ul>
+      </nav>
+
+      <div class="p-sidebar-fundo">
+        <button type="button" class="p-nav-btn" id="btn-alterar-senha">
+          <span aria-hidden="true">🔑</span> Alterar senha</button>
+        <button type="button" class="p-nav-btn p-nav-sair" id="btn-sair">
+          <span aria-hidden="true">↩</span> Sair</button>
+      </div>
+    </aside>
+
+    <main class="p-main">
+
+      <!-- Resumo -->
+      <section id="vista-resumo">
+        <header class="p-cabecalho">
+          <div>
+            <h1>Resumo da plataforma</h1>
+            <p id="resumo-sub">A carregar…</p>
+          </div>
+          <button type="button" class="btn btn-secondary" id="btn-actualizar-resumo">Actualizar</button>
+        </header>
+
+        <div class="p-kpis" id="resumo-kpis"></div>
+
+        <div class="p-cartao glass">
+          <div class="p-cartao-topo">
+            <h2>Encomendas dos últimos 14 dias</h2>
+            <span class="p-legenda" id="serie-legenda"></span>
+          </div>
+          <div id="serie-grafico" class="p-grafico"></div>
+        </div>
+
+        <div class="p-cartao glass">
+          <div class="p-cartao-topo">
+            <h2>Clientes com mais volume (30 dias)</h2>
+            <button type="button" class="p-link" id="btn-ver-todos">Ver todos os restaurantes</button>
+          </div>
+          <div class="p-tabela-envolvente">
+            <table class="p-tabela">
+              <thead>
+                <tr>
+                  <th>Restaurante</th><th class="p-num">Encomendas</th>
+                  <th class="p-num">Volume</th><th>Última encomenda</th>
+                </tr>
+              </thead>
+              <tbody id="top-clientes"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Restaurantes -->
+      <section id="vista-restaurantes" hidden>
+        <header class="p-cabecalho">
+          <div>
+            <h1>Restaurantes</h1>
+            <p id="lista-sub">A carregar…</p>
+          </div>
+        </header>
+
+        <div class="p-filtros glass">
+          <div class="p-filtro-busca">
+            <label class="p-etiqueta" for="filtro-q">Procurar</label>
+            <input type="search" id="filtro-q" class="form-control"
+                   placeholder="Nome, endereço, domínio ou NIF">
+          </div>
+          <div>
+            <label class="p-etiqueta" for="filtro-estado">Estado</label>
+            <select id="filtro-estado" class="form-control">
+              <option value="">Todos</option>
+              <option value="activos">Activos</option>
+              <option value="suspensos">Suspensos</option>
+              <option value="sem_vendas">Sem vendas</option>
+            </select>
+          </div>
+          <div>
+            <label class="p-etiqueta" for="filtro-ordem">Ordenar por</label>
+            <select id="filtro-ordem" class="form-control">
+              <option value="recentes">Mais recentes</option>
+              <option value="volume">Volume (30 dias)</option>
+              <option value="encomendas">Encomendas (30 dias)</option>
+              <option value="actividade">Última encomenda</option>
+              <option value="nome">Nome</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="p-cartao glass">
+          <div class="p-tabela-envolvente">
+            <table class="p-tabela p-tabela-clicavel">
+              <thead>
+                <tr>
+                  <th>Restaurante</th><th>Endereço</th><th>Estado</th>
+                  <th class="p-num">Equipa</th><th class="p-num">Produtos</th>
+                  <th class="p-num">Encomendas 30d</th><th class="p-num">Volume 30d</th>
+                  <th>Cliente desde</th>
+                </tr>
+              </thead>
+              <tbody id="lista-restaurantes"></tbody>
+            </table>
+          </div>
+          <div class="p-paginacao" id="lista-paginacao"></div>
+        </div>
+      </section>
+
+      <!-- Auditoria -->
+      <section id="vista-auditoria" hidden>
+        <header class="p-cabecalho">
+          <div>
+            <h1>Registo de auditoria</h1>
+            <p id="auditoria-sub">Acções administrativas de todos os restaurantes.</p>
+          </div>
+          <button type="button" class="btn btn-secondary" id="btn-actualizar-auditoria">Actualizar</button>
+        </header>
+
+        <div class="p-filtros glass">
+          <div class="p-filtro-busca">
+            <label class="p-etiqueta" for="auditoria-acao">Acção começa por</label>
+            <input type="search" id="auditoria-acao" class="form-control"
+                   placeholder="Ex.: encomenda_, plataforma_, config_">
+          </div>
+        </div>
+
+        <div class="p-cartao glass">
+          <div class="p-tabela-envolvente">
+            <table class="p-tabela">
+              <thead>
+                <tr>
+                  <th>Quando</th><th>Restaurante</th><th>Quem</th>
+                  <th>Acção</th><th>Detalhe</th><th>IP</th>
+                </tr>
+              </thead>
+              <tbody id="lista-auditoria"></tbody>
+            </table>
+          </div>
+          <div class="p-paginacao" id="auditoria-paginacao"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Detalhe de um restaurante. Preenchido por JavaScript. -->
+  <div class="p-gaveta-fundo" id="detalhe-fundo" hidden>
+    <aside class="p-gaveta glass" id="detalhe" role="dialog" aria-modal="true"
+           aria-labelledby="detalhe-titulo" tabindex="-1"></aside>
+  </div>
+
+  <!-- Alterar a senha da conta da plataforma. -->
+  <div class="p-modal-fundo" id="senha-fundo" hidden>
+    <div class="p-modal glass" role="dialog" aria-modal="true" aria-labelledby="senha-titulo">
+      <h2 id="senha-titulo">Alterar a senha</h2>
+      <p class="p-modal-sub">Ao mudar a senha, as outras sessões abertas são terminadas.</p>
+      <form id="senha-form">
+        <div class="form-group">
+          <label for="senha-atual">Senha actual</label>
+          <input type="password" id="senha-atual" class="form-control" required
+                 autocomplete="current-password">
+        </div>
+        <div class="form-group" style="margin-top:1rem;">
+          <label for="senha-nova">Senha nova</label>
+          <input type="password" id="senha-nova" class="form-control" required
+                 autocomplete="new-password">
+        </div>
+        <div class="p-modal-acoes">
+          <button type="button" class="btn btn-secondary" id="senha-cancelar">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- common.js primeiro: define esc, formatCents e showToast, que plataforma.js consome. -->
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/plataforma.js"></script>
+</body>
+</html>

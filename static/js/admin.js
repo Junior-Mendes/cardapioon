@@ -27,6 +27,7 @@ let timerPedidos = null;
 document.addEventListener('DOMContentLoaded', () => {
   registarServiceWorker();
   prepararInstalacao();
+  carregarBrandingPublico();
   checkAuth();
   setupEventListeners();
 });
@@ -50,6 +51,8 @@ function checkAuth() {
 
   loadDashboardData();
   iniciarTempoReal();
+  inicializarSubscricaoPush();
+  iniciarBrandingAdmin();
 
   // Registo acabado de fazer: abre as Configurações, onde o estado do endereço é
   // mostrado, em vez de deixar o lojista num quadro de encomendas vazio sem saber se
@@ -243,6 +246,12 @@ function switchTab(tab) {
     if (nav) nav.classList.toggle('active', tab === nome);
   });
 
+  // Fechar menu lateral no mobile após mudar de aba
+  const sidebar = document.querySelector('.sidebar');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  if (sidebar) sidebar.classList.remove('open');
+  if (backdrop) backdrop.classList.remove('active');
+
   if (tab !== 'configuracoes') pararVigilanciaStorefront();
 
   if (tab === 'usuarios') loadUsers();
@@ -374,6 +383,8 @@ function renderOrdersBoard() {
   Object.keys(contagens).forEach((k) => {
     const el = document.getElementById(`count-${k}`);
     if (el) el.innerText = contagens[k];
+    const tabEl = document.getElementById(`tab-count-${k}`);
+    if (tabEl) tabEl.innerText = contagens[k];
   });
 }
 
@@ -868,6 +879,7 @@ async function loadGeneralConfig() {
   if (!Sessao.temSessao()) return;
   try {
     const config = await api('/api/admin/config');
+    aplicarBrandingAdmin(config);
 
     definirValor('config-rest-nome', config.nome || '');
     definirValor('config-rest-nif', config.nif || '');
@@ -1502,4 +1514,174 @@ function setupEventListeners() {
   });
   ligar('btn-save-domain', 'click', handleSaveDomain);
   ligar('btn-check-dns', 'click', handleVerifyDomain);
+
+  setupMobileMenu();
+  setupKanbanTabs();
+}
+
+function setupMobileMenu() {
+  const toggleBtn = document.getElementById('mobile-menu-toggle');
+  const sidebar = document.querySelector('.sidebar');
+  const backdrop = document.getElementById('sidebar-backdrop');
+
+  if (toggleBtn && sidebar && backdrop) {
+    toggleBtn.addEventListener('click', () => {
+      sidebar.classList.toggle('open');
+      backdrop.classList.toggle('active');
+    });
+
+    backdrop.addEventListener('click', () => {
+      sidebar.classList.remove('open');
+      backdrop.classList.remove('active');
+    });
+  }
+}
+
+function setupKanbanTabs() {
+  const tabsContainer = document.getElementById('kanban-tabs-container');
+  if (!tabsContainer) return;
+
+  tabsContainer.querySelectorAll('.kanban-tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const targetCol = btn.dataset.coluna;
+
+      // Alternar classe active nos botões
+      tabsContainer.querySelectorAll('.kanban-tab-btn').forEach((t) => {
+        t.classList.toggle('active', t === btn);
+      });
+
+      // Alternar classe active nas colunas do quadro
+      ['pendente', 'preparando', 'pronto', 'finalizado'].forEach((col) => {
+        const el = document.getElementById(`col-${col}`);
+        if (el) el.classList.toggle('active', col === targetCol);
+      });
+    });
+  });
+}
+
+// --- Branding Dinâmico ---
+
+let brandingAplicado = false;
+
+function calcularIniciais(nome) {
+  if (!nome) return '?';
+  const palavras = nome.split(/\s+/);
+  const iniciais = [];
+  const stopWords = ['do', 'da', 'de', 'dos', 'das', 'e'];
+
+  for (const palavra of palavras) {
+    if (!palavra) continue;
+    const minuscula = palavra.toLowerCase();
+    if (iniciais.length > 0 && stopWords.includes(minuscula)) {
+      continue;
+    }
+    iniciais.push(palavra[0].toUpperCase());
+    if (iniciais.length === 2) break;
+  }
+
+  return iniciais.length > 0 ? iniciais.join('') : '?';
+}
+
+function aplicarBrandingAdmin(config) {
+  if (!config) return;
+
+  // 1. Atualizar logótipos (.logo-icon)
+  const icones = document.querySelectorAll('.logo-icon');
+  icones.forEach((icone) => {
+    if (icone.id === 'preview-logo') return;
+
+    if (config.logo_url) {
+      icone.textContent = '';
+      icone.style.backgroundImage = `url('${config.logo_url}')`;
+      icone.style.backgroundSize = 'cover';
+      icone.style.backgroundPosition = 'center';
+      icone.style.borderRadius = 'var(--radius-sm)';
+    } else {
+      icone.style.backgroundImage = 'none';
+      icone.textContent = config.iniciais || calcularIniciais(config.nome);
+    }
+  });
+
+  // 2. Atualizar o texto do logótipo (.logo-text)
+  const textos = document.querySelectorAll('.logo-text');
+  textos.forEach((texto) => {
+    if (config.nome) {
+      texto.textContent = config.nome;
+    }
+  });
+
+  // 3. Atualizar cores primárias no CSS
+  if (config.cor_primaria) {
+    const raiz = document.documentElement;
+    raiz.style.setProperty('--primary', config.cor_primaria);
+
+    const componentes = (hex) => {
+      const h = String(hex).replace('#', '');
+      if (h.length !== 6) return null;
+      return [
+        parseInt(h.slice(0, 2), 16),
+        parseInt(h.slice(2, 4), 16),
+        parseInt(h.slice(4, 6), 16),
+      ];
+    };
+
+    const paraHex = ([r, g, b]) => {
+      const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
+      return '#' + [r, g, b].map((v) => clamp(v).toString(16).padStart(2, '0')).join('');
+    };
+
+    const escurecer = (hex, fraccao) => {
+      const c = componentes(hex);
+      return c ? paraHex(c.map((v) => v * (1 - fraccao))) : hex;
+    };
+
+    const clarear = (hex, fraccao) => {
+      const c = componentes(hex);
+      return c ? paraHex(c.map((v) => v + (255 - v) * fraccao)) : hex;
+    };
+
+    raiz.style.setProperty('--primary-dark', escurecer(config.cor_primaria, 0.15));
+    raiz.style.setProperty('--primary-light', clarear(config.cor_primaria, 0.2));
+    if (config.cor_texto_sobre_primaria) {
+      raiz.style.setProperty('--on-primary', config.cor_texto_sobre_primaria);
+    }
+  }
+
+  // 4. Favicon
+  if (config.logo_url) {
+    let link = document.querySelector('link[rel="icon"]');
+    if (!link) {
+      link = document.createElement('link');
+      link.setAttribute('rel', 'icon');
+      document.head.appendChild(link);
+    }
+    link.setAttribute('href', config.logo_url);
+  }
+
+  // 5. Título da aba do browser
+  if (config.nome) {
+    document.title = `${config.nome} — Painel Administrativo`;
+  }
+}
+
+async function iniciarBrandingAdmin() {
+  if (brandingAplicado) return;
+  try {
+    const config = await api('/api/admin/config');
+    aplicarBrandingAdmin(config);
+    brandingAplicado = true;
+  } catch (err) {
+    console.warn('Erro ao carregar branding autenticado do admin:', err);
+  }
+}
+
+async function carregarBrandingPublico() {
+  try {
+    const dados = await api('/api/public-menu', { autenticado: false });
+    if (dados && dados.restaurante) {
+      aplicarBrandingAdmin(dados.restaurante);
+    }
+  } catch (err) {
+    console.warn('Branding público não carregado:', err);
+  }
 }

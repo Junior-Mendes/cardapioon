@@ -81,6 +81,12 @@ func executar() error {
 		Eventos_: eventos.NewBroker(),
 	})
 
+	// Primeira conta do painel da plataforma, se o ambiente a indicar e ainda não existir
+	// nenhuma. Falha o arranque com uma senha fraca: uma conta destas vê todos os clientes.
+	if err := h.GarantirAdminPlataforma(); err != nil {
+		return err
+	}
+
 	if err := h.SincronizarRotasTraefik(); err != nil {
 		// Uma falha aqui deixa clientes sem rota, mas o servidor ainda serve o domínio
 		// principal; registamos e continuamos.
@@ -163,6 +169,8 @@ func construirRouter(
 	limiteDNS := middleware.NewRateLimiter(10, 5)
 	// Upload é caro (descodificar e recodificar imagem): limite mais apertado.
 	limiteUpload := middleware.NewRateLimiter(30, 10)
+	// Painel da plataforma: uma única conta, logo nunca há tráfego legítimo em volume.
+	limitePlataforma := middleware.NewRateLimiter(10, 5)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -181,6 +189,17 @@ func construirRouter(
 	r.StaticFile("/admin", "./static/admin.html")
 	r.StaticFile("/redefinir-senha", "./static/reset.html")
 	r.StaticFile("/privacidade", "./static/privacidade.html")
+
+	// Painel do dono do SaaS. Servido apenas no domínio principal: nos endereços dos
+	// clientes não tem nada que fazer, e não anunciar a sua existência no subdomínio de
+	// cada restaurante reduz a superfície que alguém tenta forçar.
+	r.GET("/plataforma", func(c *gin.Context) {
+		if !resolver.IsMainDomain(c.Request.Host) {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		c.File("./static/plataforma.html")
+	})
 
 	// PWA. O manifest e o service worker são servidos da raiz de propósito: um service
 	// worker só controla páginas dentro do seu próprio caminho, pelo que servido de
@@ -237,6 +256,11 @@ func construirRouter(
 		admin.GET("/eventos", middleware.RequireRole(middleware.RoleFuncionario), h.Eventos)
 		admin.POST("/conta/alterar-senha", h.AlterarSenha)
 
+		// Web Push
+		admin.GET("/push/chave-publica", h.GetPushPublicKey)
+		admin.POST("/push/subscrever", h.SubscreverPush)
+		admin.POST("/push/cancelar", h.CancelarPush)
+
 		// Configuração do restaurante e domínio: apenas owner e admin.
 		gestao := admin.Group("", middleware.RequireRole(middleware.RoleAdmin))
 		{
@@ -277,6 +301,34 @@ func construirRouter(
 		}
 	}
 
+	// Painel da plataforma: as rotas do dono do SaaS.
+	//
+	// Árvore separada de /api/admin de propósito. RequirePlataforma valida uma audiência de
+	// token diferente e nunca escreve tenant_id no contexto, pelo que nem um token de
+	// lojista abre estas rotas nem um token da plataforma abre as administrativas.
+	plataforma := r.Group("/api/plataforma")
+	{
+		// Alvo de força-bruta de maior valor que o login dos lojistas: uma só conta, com
+		// visibilidade sobre todos os clientes. Limite por IP e por conta, como no login.
+		plataforma.POST("/login", limitePlataforma.LimitBy(chavePorIPeCorpo), h.PlataformaLogin)
+		plataforma.POST("/refresh", limitePlataforma.Limit(), h.PlataformaRefresh)
+		plataforma.POST("/logout", h.PlataformaLogout)
+
+		autenticado := plataforma.Group("", middleware.RequirePlataforma(h.Tokens))
+		{
+			autenticado.GET("/eu", h.PlataformaEu)
+			autenticado.POST("/conta/alterar-senha", h.PlataformaAlterarSenha)
+
+			autenticado.GET("/resumo", h.PlataformaResumo)
+			autenticado.GET("/restaurantes", h.PlataformaListarRestaurantes)
+			autenticado.GET("/restaurantes/:id", h.PlataformaVerRestaurante)
+			autenticado.PATCH("/restaurantes/:id/estado", h.PlataformaDefinirEstado)
+			autenticado.POST("/restaurantes/:id/recuperacao", limiteAuth.Limit(),
+				h.PlataformaEnviarRecuperacao)
+			autenticado.GET("/auditoria", h.PlataformaAuditoria)
+		}
+	}
+
 	return r
 }
 
@@ -298,6 +350,10 @@ func iniciarLimpezaPeriodica(gdb *gorm.DB) {
 			if err := gdb.Where("expires_at < ?", agora.Add(-24*time.Hour)).
 				Delete(&models.RefreshToken{}).Error; err != nil {
 				slog.Error("falha ao limpar refresh tokens expirados", "erro", err)
+			}
+			if err := gdb.Where("expires_at < ?", agora.Add(-24*time.Hour)).
+				Delete(&models.PlataformaRefreshToken{}).Error; err != nil {
+				slog.Error("falha ao limpar refresh tokens da plataforma expirados", "erro", err)
 			}
 			if err := gdb.Where("expires_at < ?", agora.Add(-24*time.Hour)).
 				Delete(&models.PasswordReset{}).Error; err != nil {

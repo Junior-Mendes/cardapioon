@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +58,9 @@ type ambiente struct {
 	userA, userB     models.Usuario
 	itemA, itemB     models.MenuItem
 	pedidoA, pedidoB models.Pedido
+
+	// Conta do painel do dono do SaaS. Realm de autenticação separado.
+	adminPlataforma models.PlataformaAdmin
 }
 
 func montarAmbiente(t *testing.T) *ambiente {
@@ -135,6 +139,10 @@ func montarRotas(h *handlers.Handler, resolver *middleware.TenantResolver, token
 		admin.POST("/conta/alterar-senha", h.AlterarSenha)
 		admin.GET("/eventos", middleware.RequireRole(middleware.RoleFuncionario), h.Eventos)
 
+		admin.GET("/push/chave-publica", h.GetPushPublicKey)
+		admin.POST("/push/subscrever", h.SubscreverPush)
+		admin.POST("/push/cancelar", h.CancelarPush)
+
 		gestao := admin.Group("", middleware.RequireRole(middleware.RoleAdmin))
 		gestao.PUT("/config", h.UpdateConfig)
 		gestao.POST("/config/dominio", h.SolicitarDominio)
@@ -157,14 +165,49 @@ func montarRotas(h *handlers.Handler, resolver *middleware.TenantResolver, token
 		usuarios.POST("", h.CreateUsuario)
 		usuarios.DELETE("/:id", h.DeleteUsuario)
 	}
+
+	plataforma := r.Group("/api/plataforma")
+	{
+		plataforma.POST("/login", h.PlataformaLogin)
+		plataforma.POST("/refresh", h.PlataformaRefresh)
+		plataforma.POST("/logout", h.PlataformaLogout)
+
+		autenticado := plataforma.Group("", middleware.RequirePlataforma(tokens))
+		autenticado.GET("/eu", h.PlataformaEu)
+		autenticado.POST("/conta/alterar-senha", h.PlataformaAlterarSenha)
+		autenticado.GET("/resumo", h.PlataformaResumo)
+		autenticado.GET("/restaurantes", h.PlataformaListarRestaurantes)
+		autenticado.GET("/restaurantes/:id", h.PlataformaVerRestaurante)
+		autenticado.PATCH("/restaurantes/:id/estado", h.PlataformaDefinirEstado)
+		autenticado.POST("/restaurantes/:id/recuperacao", h.PlataformaEnviarRecuperacao)
+		autenticado.GET("/auditoria", h.PlataformaAuditoria)
+	}
 	return r
+}
+
+// rotasDaPlataforma é a lista usada nos testes que verificam que estas rotas não são
+// acessíveis com um token de lojista. Mantê-la a par de montarRotas.
+func rotasDaPlataforma(tenantID uint) []pedidoHTTP {
+	return []pedidoHTTP{
+		{metodo: "GET", rota: "/api/plataforma/eu"},
+		{metodo: "GET", rota: "/api/plataforma/resumo"},
+		{metodo: "GET", rota: "/api/plataforma/restaurantes"},
+		{metodo: "GET", rota: fmt.Sprintf("/api/plataforma/restaurantes/%d", tenantID)},
+		{metodo: "PATCH", rota: fmt.Sprintf("/api/plataforma/restaurantes/%d/estado", tenantID),
+			corpo: `{"ativo":false}`},
+		{metodo: "POST", rota: fmt.Sprintf("/api/plataforma/restaurantes/%d/recuperacao", tenantID)},
+		{metodo: "GET", rota: "/api/plataforma/auditoria"},
+		{metodo: "POST", rota: "/api/plataforma/conta/alterar-senha",
+			corpo: `{"senha_atual":"SenhaTeste123","nova_senha":"OutraSenha456"}`},
+	}
 }
 
 func limparBase(t *testing.T, gdb *gorm.DB) {
 	t.Helper()
 	// Ordem inversa das dependências.
 	tabelas := []string{
-		"audit_logs", "refresh_tokens", "password_resets",
+		"audit_logs", "refresh_tokens", "password_resets", "push_subscriptions",
+		"plataforma_refresh_tokens", "plataforma_admins",
 		"pedido_iva", "itens_pedido", "pedidos", "menu_items", "usuarios", "tenants",
 		"schema_migrations",
 	}
@@ -232,11 +275,28 @@ func (a *ambiente) semear(t *testing.T, gdb *gorm.DB) {
 
 	a.tenantA, a.userA, a.itemA, a.pedidoA = criar("Restaurante A", "restaurante-a")
 	a.tenantB, a.userB, a.itemB, a.pedidoB = criar("Restaurante B", "restaurante-b")
+
+	a.adminPlataforma = models.PlataformaAdmin{
+		Nome: "Dono do SaaS", Email: "dono@plataforma.local",
+		SenhaHash: hash, Ativo: true, PasswordChangedAt: &agora,
+	}
+	if err := gdb.Create(&a.adminPlataforma).Error; err != nil {
+		t.Fatalf("criar administrador da plataforma: %v", err)
+	}
 }
 
 // tokenDe emite um access token legítimo para um utilizador.
 func (a *ambiente) tokenDe(u models.Usuario) string {
 	tok, _, err := a.tokens.IssueAccessToken(u.TenantID, u.ID, u.Role)
+	if err != nil {
+		panic(err)
+	}
+	return tok
+}
+
+// tokenDaPlataforma emite um token legítimo do painel do dono do SaaS.
+func (a *ambiente) tokenDaPlataforma() string {
+	tok, _, err := a.tokens.IssuePlataformaToken(a.adminPlataforma.ID)
 	if err != nil {
 		panic(err)
 	}
@@ -1406,5 +1466,327 @@ func TestErroInternoNaoExpoeDetalhesEmProducao(t *testing.T) {
 		if bytes.Contains([]byte(corpo), []byte(fuga)) {
 			t.Errorf("resposta expõe detalhe interno %q: %s", fuga, corpo)
 		}
+	}
+}
+
+// --- Painel da plataforma: separação entre os dois realms de autenticação ---
+//
+// O painel do dono do SaaS é a única parte da aplicação que lê os dados de vários
+// restaurantes. A garantia que o mantém seguro não é uma verificação num handler, é a
+// audiência do token: os dois tipos de sessão são assinados com o mesmo segredo mas com
+// audiências diferentes, pelo que cada validador rejeita o token do outro.
+//
+// Estes testes são a prova disso nas duas direcções. Sem eles, um refactor que unificasse
+// as duas funções de parse passaria silenciosamente a dar a qualquer lojista autenticado
+// acesso de leitura a todos os restaurantes da plataforma.
+
+// TestTokenDeLojistaNaoAbrePainelDaPlataforma é a direcção que importa mais: um lojista não
+// pode ver os dados dos concorrentes.
+func TestTokenDeLojistaNaoAbrePainelDaPlataforma(t *testing.T) {
+	amb := montarAmbiente(t)
+
+	// Um owner é o papel mais privilegiado que existe dentro de um restaurante, e mesmo
+	// assim não tem nada que fazer no painel da plataforma.
+	tokens := map[string]string{
+		"owner do tenant A": amb.tokenDe(amb.userA),
+		"owner do tenant B": amb.tokenDe(amb.userB),
+	}
+
+	for nome, tok := range tokens {
+		for _, p := range rotasDaPlataforma(amb.tenantB.ID) {
+			p.token = tok
+			rec := amb.fazer(p)
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("%s em %s %s: status %d, esperado 401\ncorpo: %s",
+					nome, p.metodo, p.rota, rec.Code, rec.Body.String())
+			}
+		}
+	}
+
+	// E nada foi alterado pela tentativa de suspender o restaurante.
+	var tenantB models.Tenant
+	if err := amb.gdb.First(&tenantB, amb.tenantB.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !tenantB.Ativo {
+		t.Error("um token de lojista suspendeu um restaurante através do painel da plataforma")
+	}
+}
+
+// TestTokenDaPlataformaNaoAbreRotasAdministrativas cobre a direcção inversa.
+//
+// O token da plataforma não tem tenant_id nenhum. Se fosse aceite em /api/admin/*, o escopo
+// de tenant resolveria para zero e — dependendo do handler — leria ou escreveria sem filtro.
+func TestTokenDaPlataformaNaoAbreRotasAdministrativas(t *testing.T) {
+	amb := montarAmbiente(t)
+	tokenPlataforma := amb.tokenDaPlataforma()
+
+	rotasAdmin := []pedidoHTTP{
+		{metodo: "GET", rota: "/api/admin/config"},
+		{metodo: "PUT", rota: "/api/admin/config", corpo: `{"nome":"Invadido"}`},
+		{metodo: "GET", rota: "/api/admin/cardapio"},
+		{metodo: "POST", rota: "/api/admin/cardapio", corpo: `{"nome":"X","preco_texto":"1,00","categoria":"Y"}`},
+		{metodo: "GET", rota: "/api/admin/pedidos"},
+		{metodo: "GET", rota: "/api/admin/usuarios"},
+		{metodo: "DELETE", rota: fmt.Sprintf("/api/admin/usuarios/%d", amb.userA.ID)},
+	}
+
+	for _, p := range rotasAdmin {
+		p.token = tokenPlataforma
+		rec := amb.fazer(p)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("token da plataforma em %s %s: status %d, esperado 401\ncorpo: %s",
+				p.metodo, p.rota, rec.Code, rec.Body.String())
+		}
+	}
+
+	// O utilizador do tenant A continua lá.
+	var userA models.Usuario
+	if err := amb.gdb.First(&userA, amb.userA.ID).Error; err != nil {
+		t.Errorf("utilizador removido com um token da plataforma: %v", err)
+	}
+}
+
+// TestPainelDaPlataformaSemTokenNaoDaAcesso cobre o caso trivial e os tokens forjados.
+func TestPainelDaPlataformaSemTokenNaoDaAcesso(t *testing.T) {
+	amb := montarAmbiente(t)
+
+	forjados := []string{
+		"",
+		"admin_user_1_1",
+		fmt.Sprintf("plataforma_admin_%d", amb.adminPlataforma.ID),
+	}
+
+	for _, tok := range forjados {
+		for _, p := range rotasDaPlataforma(amb.tenantA.ID) {
+			p.token = tok
+			rec := amb.fazer(p)
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("token %q em %s %s: status %d, esperado 401",
+					tok, p.metodo, p.rota, rec.Code)
+			}
+		}
+	}
+}
+
+// TestPainelDaPlataformaVeTodosOsRestaurantes é o requisito funcional: é para isto que o
+// painel existe. Serve também de contraprova aos testes acima — a rota funciona, e é
+// mesmo a audiência do token que decide quem entra.
+func TestPainelDaPlataformaVeTodosOsRestaurantes(t *testing.T) {
+	amb := montarAmbiente(t)
+	token := amb.tokenDaPlataforma()
+
+	rec := amb.fazer(pedidoHTTP{metodo: "GET", rota: "/api/plataforma/restaurantes", token: token})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Total        int64 `json:"total"`
+		Restaurantes []struct {
+			ID           uint   `json:"id"`
+			Slug         string `json:"slug"`
+			Ativo        bool   `json:"ativo"`
+			Encomendas   int64  `json:"encomendas"`
+			Utilizadores int64  `json:"utilizadores"`
+			Produtos     int64  `json:"produtos"`
+		} `json:"restaurantes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.Total != 2 {
+		t.Errorf("total = %d, esperado 2", resp.Total)
+	}
+	porSlug := map[string]bool{}
+	for _, r := range resp.Restaurantes {
+		porSlug[r.Slug] = true
+		// As métricas são contadas por subconsulta correlacionada: se um JOIN fosse
+		// introduzido aqui, estes números multiplicar-se-iam uns pelos outros.
+		if r.Utilizadores != 1 {
+			t.Errorf("%s: %d utilizadores, esperado 1", r.Slug, r.Utilizadores)
+		}
+		if r.Produtos != 1 {
+			t.Errorf("%s: %d produtos, esperado 1", r.Slug, r.Produtos)
+		}
+		if r.Encomendas != 1 {
+			t.Errorf("%s: %d encomendas, esperado 1", r.Slug, r.Encomendas)
+		}
+	}
+	if !porSlug[amb.tenantA.Slug] || !porSlug[amb.tenantB.Slug] {
+		t.Errorf("a listagem não devolveu os dois restaurantes: %v", porSlug)
+	}
+
+	// O resumo agrega a plataforma inteira e a série tem sempre um ponto por dia.
+	rec = amb.fazer(pedidoHTTP{metodo: "GET", rota: "/api/plataforma/resumo", token: token})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resumo: status %d: %s", rec.Code, rec.Body.String())
+	}
+	var resumo struct {
+		Restaurantes        int64 `json:"restaurantes"`
+		RestaurantesActivos int64 `json:"restaurantes_activos"`
+		DiasSerie           int   `json:"dias_serie"`
+		Serie               []struct {
+			Dia string `json:"dia"`
+		} `json:"serie"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resumo); err != nil {
+		t.Fatal(err)
+	}
+	if resumo.Restaurantes != 2 || resumo.RestaurantesActivos != 2 {
+		t.Errorf("resumo: %d restaurantes, %d activos; esperado 2 e 2",
+			resumo.Restaurantes, resumo.RestaurantesActivos)
+	}
+	if len(resumo.Serie) != resumo.DiasSerie {
+		t.Errorf("série com %d pontos, esperado %d (os dias vazios têm de ser preenchidos)",
+			len(resumo.Serie), resumo.DiasSerie)
+	}
+}
+
+// TestPainelDaPlataformaNaoExpoeDadosDoConsumidor: minimização de dados. Quem opera a
+// plataforma precisa de saber que houve encomendas, não quem as fez.
+func TestPainelDaPlataformaNaoExpoeDadosDoConsumidor(t *testing.T) {
+	amb := montarAmbiente(t)
+
+	rec := amb.fazer(pedidoHTTP{
+		metodo: "GET", rota: fmt.Sprintf("/api/plataforma/restaurantes/%d", amb.tenantA.ID),
+		token: amb.tokenDaPlataforma(),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	corpo := rec.Body.String()
+	for _, fuga := range []string{amb.pedidoA.ClienteNome, amb.pedidoA.ClienteTelefone, "cliente_nome", "cliente_telefone"} {
+		if strings.Contains(corpo, fuga) {
+			t.Errorf("o detalhe do restaurante expõe %q do consumidor final", fuga)
+		}
+	}
+}
+
+// TestSuspenderRestauranteFechaOStorefrontEAsSessoes: a suspensão é a operação de cobrança
+// da plataforma, e tem de ter efeito imediato nas duas frentes.
+func TestSuspenderRestauranteFechaOStorefrontEAsSessoes(t *testing.T) {
+	amb := montarAmbiente(t)
+	hostB := amb.tenantB.Slug + "." + dominioTeste
+
+	// Antes: o menu de B responde.
+	if rec := amb.fazer(pedidoHTTP{metodo: "GET", rota: "/api/public-menu", host: hostB}); rec.Code != http.StatusOK {
+		t.Fatalf("menu de B antes da suspensão: status %d", rec.Code)
+	}
+
+	// Uma sessão aberta do lojista de B, para verificar que é revogada.
+	_, hashRefresh := auth.NewRefreshToken()
+	sessao := models.RefreshToken{
+		UsuarioID: amb.userB.ID, TenantID: amb.tenantB.ID, TokenHash: hashRefresh,
+		ExpiresAt: time.Now().Add(24 * time.Hour), CreatedAt: time.Now(),
+	}
+	if err := amb.gdb.Create(&sessao).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	rec := amb.fazer(pedidoHTTP{
+		metodo: "PATCH", rota: fmt.Sprintf("/api/plataforma/restaurantes/%d/estado", amb.tenantB.ID),
+		corpo: `{"ativo":false,"motivo":"subscrição em atraso"}`,
+		token: amb.tokenDaPlataforma(),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("suspender: status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// O storefront deixa de responder.
+	if rec := amb.fazer(pedidoHTTP{metodo: "GET", rota: "/api/public-menu", host: hostB}); rec.Code != http.StatusNotFound {
+		t.Errorf("menu de um restaurante suspenso: status %d, esperado 404", rec.Code)
+	}
+
+	// A sessão do lojista foi revogada.
+	var depois models.RefreshToken
+	if err := amb.gdb.First(&depois, sessao.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if depois.RevokedAt == nil {
+		t.Error("a sessão do lojista continuou válida depois da suspensão")
+	}
+
+	// O restaurante A não foi afectado.
+	if rec := amb.fazer(pedidoHTTP{metodo: "GET", rota: "/api/public-menu",
+		host: amb.tenantA.Slug + "." + dominioTeste}); rec.Code != http.StatusOK {
+		t.Errorf("suspender B afectou o menu de A: status %d", rec.Code)
+	}
+
+	// A acção ficou registada, com motivo, no histórico do restaurante afectado.
+	var registo models.AuditLog
+	if err := amb.gdb.Where("acao = ?", "plataforma_restaurante_suspenso").
+		Order("id desc").First(&registo).Error; err != nil {
+		t.Fatalf("auditoria da suspensão não encontrada: %v", err)
+	}
+	if registo.TenantID == nil || *registo.TenantID != amb.tenantB.ID {
+		t.Errorf("auditoria com tenant_id %v, esperado %d", registo.TenantID, amb.tenantB.ID)
+	}
+	if !strings.Contains(registo.Detalhe, "subscrição em atraso") {
+		t.Errorf("o motivo não ficou registado: %q", registo.Detalhe)
+	}
+	// usuario_id refere-se a `usuarios`; um administrador da plataforma não está lá.
+	if registo.UsuarioID != nil {
+		t.Errorf("auditoria da plataforma com usuario_id %v, esperado nulo", registo.UsuarioID)
+	}
+
+	// Reactivar repõe o serviço.
+	rec = amb.fazer(pedidoHTTP{
+		metodo: "PATCH", rota: fmt.Sprintf("/api/plataforma/restaurantes/%d/estado", amb.tenantB.ID),
+		corpo: `{"ativo":true}`, token: amb.tokenDaPlataforma(),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reactivar: status %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec := amb.fazer(pedidoHTTP{metodo: "GET", rota: "/api/public-menu", host: hostB}); rec.Code != http.StatusOK {
+		t.Errorf("menu depois de reactivar: status %d, esperado 200", rec.Code)
+	}
+}
+
+// TestLoginDaPlataformaNaoAceitaContaDeLojista: as duas tabelas de contas são distintas, e
+// as credenciais de uma não servem na outra.
+func TestLoginDaPlataformaNaoAceitaContaDeLojista(t *testing.T) {
+	amb := montarAmbiente(t)
+
+	// A senha é a mesma nas duas contas semeadas, pelo que só a tabela distingue.
+	rec := amb.fazer(pedidoHTTP{
+		metodo: "POST", rota: "/api/plataforma/login",
+		corpo: fmt.Sprintf(`{"identifier":%q,"password":"SenhaTeste123"}`, amb.userA.Email),
+	})
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("credenciais de lojista aceitas no painel da plataforma: status %d: %s",
+			rec.Code, rec.Body.String())
+	}
+
+	// E o inverso: a conta da plataforma não entra no painel do lojista.
+	rec = amb.fazer(pedidoHTTP{
+		metodo: "POST", rota: "/api/plataforma/login",
+		corpo: fmt.Sprintf(`{"identifier":%q,"password":"SenhaTeste123"}`, amb.adminPlataforma.Email),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login legítimo da plataforma recusado: status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var sessao struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &sessao); err != nil {
+		t.Fatal(err)
+	}
+	if sessao.AccessToken == "" {
+		t.Fatal("login da plataforma não devolveu access token")
+	}
+
+	// O token emitido pelo login serve no painel da plataforma...
+	if rec := amb.fazer(pedidoHTTP{metodo: "GET", rota: "/api/plataforma/eu",
+		token: sessao.AccessToken}); rec.Code != http.StatusOK {
+		t.Errorf("token do login da plataforma recusado em /eu: status %d", rec.Code)
+	}
+	// ...e não serve em nenhuma rota administrativa.
+	if rec := amb.fazer(pedidoHTTP{metodo: "GET", rota: "/api/admin/cardapio",
+		token: sessao.AccessToken}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("token do login da plataforma aceito em /api/admin/cardapio: status %d", rec.Code)
 	}
 }
