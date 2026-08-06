@@ -44,6 +44,14 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # Lint do frontend. Apanha identificadores inexistentes entre ficheiros, que a
+      # verificação de sintaxe não apanha — foi assim que a submissão de encomendas ficou
+      # silenciosamente quebrada em produção.
+      - name: Lint do frontend
+        run: |
+          npm install -g eslint@8
+          cd static/js && eslint *.js
+
       - name: Análise de segurança (gosec)
         uses: securego/gosec@master
         with:

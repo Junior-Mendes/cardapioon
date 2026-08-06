@@ -1,164 +1,128 @@
-# 🍽️ Cardápio Online - Plataforma Multi-Tenant SaaS
+# Menu Online — SaaS de menu digital para restaurantes
 
-Este projeto é um sistema SaaS de **Cardápio Online Multi-Tenant** de alta performance, projetado para permitir que restaurantes gerenciem seus próprios cardápios e recebam pedidos diretamente via WhatsApp ou painel de controle. 
+Plataforma multi-tenant onde cada restaurante tem o seu próprio endereço
+(`restaurante.dominio.pt`, ou um domínio próprio) com certificado TLS automático. O cliente
+abre o menu no telemóvel, encomenda, e vai levantar ao balcão.
 
-O sistema foi arquitetado para suportar **subdomínios wildcard** (ex: `restaurante.topautomacaojr.top`) e **domínios customizados** de clientes (ex: `www.pizzariadojoao.com.br`) com provisionamento automático de certificados SSL (Let's Encrypt) gerenciado via **Traefik File Provider**.
+**Mercado: Portugal.** Interface em pt-PT, valores em euros, IVA por produto com o preço
+final ao consumidor.
 
----
-
-## 🚀 Principais Funcionalidades
-
-- **Multi-Tenant Arquitetura Única (Single Database, Multi-Tenant)**: Separação lógica de dados usando escopos de consulta no banco de dados.
-- **Domínios Customizados & Subdomínios Wildcard**: Roteamento dinâmico automático com suporte a SSL.
-- **Redirecionamento Inteligente na Raiz (`/`)**:
-  - Acessos pelo domínio principal (`topautomacaojr.top`) exibem a Landing Page oficial com formulário de cadastro.
-  - Acessos por subdomínios ou domínios de clientes são automaticamente redirecionados (301) para `/menu` (storefront).
-- **Gestão de Cardápio (Painel do Lojista)**: Cadastro de produtos, categorias, preços com desconto, imagens e controle de disponibilidade.
-- **Gestão de Pedidos**: Recepção de pedidos em tempo real no painel administrativo, alteração de status e integração de envio/rastreamento.
-- **Configurações de Pagamento**: Ativação dinâmica de Pix, Cartão de Crédito, Cartão de Débito e Dinheiro.
-- **Controle de Usuários por Lojista**: Possibilidade de criar novos usuários administrativos dentro do restaurante com diferentes papéis.
+> **A trabalhar no código?** Lê primeiro o [`AGENTS.md`](AGENTS.md). Tem as invariantes que
+> não devem ser quebradas, as armadilhas já encontradas, e o mapa do código. Este README é
+> só a visão geral.
 
 ---
 
-## 🛠️ Stack Tecnológica
+## O que faz
 
-- **Backend**: Go 1.20 (Framework Gin Gonic, ORM GORM)
-- **Banco de Dados**: MySQL (Auto-Migrações & Seeders automáticos)
-- **Frontend**: HTML5, Vanilla JavaScript, CSS3 Premium (Visual moderno com Glassmorphism e responsividade)
-- **Proxy Reverso & Edge Router**: Traefik v2.10 (SSL automatizado via Let's Encrypt)
-- **Containerização**: Docker & Docker Compose
+**Para o cliente** — menu por categorias com barra fixa que acompanha o scroll, pesquisa,
+detalhe do prato com quantidade e observações («sem cebola»), e acompanhamento da encomenda
+por link.
+
+**Para o lojista** — quadro de encomendas em tempo real com aviso sonoro, gestão do menu por
+categorias com pausa de um toque, identidade visual própria (logótipo, cores), upload de
+fotografias do telemóvel, e painel instalável como aplicação.
+
+**Âmbito do MVP:** levantamento ao balcão com pagamento na caixa. Sem entrega, sem pagamento
+na aplicação, sem emissão de facturas — decisões deliberadas, explicadas no `AGENTS.md`.
 
 ---
 
-## 📁 Estrutura do Projeto
+## Stack
 
-```text
-/root/cardapio
-├── cmd/
-│   └── api/
-│       └── main.go                 # Ponto de entrada (Bootstrap, rotas e inicialização)
-├── internal/
-│   ├── config/
-│   │   └── config.go               # Leitura de variáveis de ambiente
-│   ├── db/
-│   │   └── mysql.go                # Conexão GORM, migrações e seeders
-│   ├── handlers/
-│   │   ├── helper.go               # Resolvedor de inquilino compartilhado
-│   │   ├── menu.go                 # Métodos de gerenciamento do cardápio
-│   │   ├── order.go                # Criação e processamento de pedidos
-│   │   └── tenant.go               # Registro, login, configs e geração de Traefik yml
-│   ├── middleware/
-│   │   └── tenant.go               # Middleware de isolamento de inquilinos (Tenant Context & Scope)
-│   └── models/
-│       ├── menu.go                 # Modelos do cardápio
-│       ├── order.go                # Modelos de pedidos e itens
-│       ├── tenant.go               # Modelo de restaurantes (Tenant)
-│       └── usuario.go              # Modelo de usuários e permissões
-├── static/                         # Frontend do app (Arquivos estáticos)
-│   ├── admin.html / js / css       # Painel administrativo do lojista
-│   ├── index.html                  # Landing Page / Cadastro do SaaS
-│   ├── menu.html / js / css        # Storefront / Cardápio público do restaurante
-│   └── order.html / js / css       # Página de rastreamento do pedido
-├── traefik_dynamic/                # Arquivos YML dinâmicos gerados pelo Go para o Traefik
-├── docker-compose.yml              # Definição dos containers (API e Traefik)
-├── Dockerfile                      # Build multi-stage do binário Go
-└── .env                            # Variáveis de ambiente locais
+Go 1.23 (Gin, GORM) · MySQL 8 · Traefik v3 com Let's Encrypt · HTML, CSS e JavaScript sem
+framework · Docker Compose.
+
+Sem dependências de frontend: o JavaScript são scripts clássicos que comunicam por globais,
+e não há passo de build para o cliente.
+
+---
+
+## Pôr a correr
+
+```bash
+cp .env.example .env
+# Preencher DB_*, MAIN_DOMAIN, e gerar o segredo:
+#   openssl rand -base64 48   → JWT_SECRET
+
+docker compose build
+docker compose up -d
 ```
 
----
+O arranque aplica as migrações e escreve as rotas do Traefik para os restaurantes activos.
 
-## ⚙️ Configuração de Ambiente (`.env`)
+O contentor corre como utilizador sem privilégios (uid 100). O directório
+`traefik_dynamic/` é montado do host e tem de lhe pertencer, ou a aplicação não consegue
+publicar rotas:
 
-Crie um arquivo `.env` na raiz do projeto seguindo as chaves de configuração abaixo:
-
-```ini
-# Configurações do Banco de Dados MySQL na OCI
-DB_HOST=10.0.0.143
-DB_PORT=3306
-DB_USER=seu_usuario
-DB_PASSWORD="sua_senha_segura"
-DB_NAME=cardapio_online
-
-# Configurações de Porta do Servidor
-PORT=8081
-GIN_MODE=debug # Mude para 'release' em produção
-MAIN_DOMAIN=topautomacaojr.top
+```bash
+chown -R 100:101 traefik_dynamic uploads
 ```
 
+Depois, cria o primeiro restaurante no formulário da página inicial.
+
+### Variáveis essenciais
+
+| Variável | Para quê |
+|---|---|
+| `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | MySQL |
+| `MAIN_DOMAIN` | Domínio do SaaS; os subdomínios dos restaurantes derivam dele |
+| `JWT_SECRET` | Assinatura das sessões. Sem ele o servidor não arranca, de propósito |
+| `SMTP_HOST`, `MAIL_FROM` | Sem isto o reset de senha fica no log em vez de ser enviado |
+| `TRUSTED_PROXIES` | Sem isto o IP do cliente é falsificável e o rate limit contornável |
+| `SEED_DEMO_DATA` | Dados de demonstração. Proibido em produção pela configuração |
+
+O ficheiro `.env` não é versionado, e não deve ser: contém a senha da base de dados.
+
 ---
 
-## 🔄 Fluxo de Roteamento Dinâmico (Traefik File Provider)
+## Testar
 
-Para permitir a geração automática de certificados SSL sem precisar reiniciar o proxy reverso a cada novo cliente cadastrado, implementamos a integração via **Traefik File Provider**:
+Os testes usam **MySQL real** — o GORM gera SQL específico do dialecto, e um SQLite em
+memória não provaria o mesmo comportamento.
 
-1. **Cadastro**: Quando o cliente se cadastra na Landing Page (ex: definindo o slug `testejr`), o backend salva o registro no MySQL.
-2. **Geração do Arquivo**: O backend grava dinamicamente o arquivo `/traefik_dynamic/testejr.yml`.
-3. **Escuta Ativa**: O Traefik detecta a mudança instantaneamente (`watch=true`) e cria uma nova rota apontando para a API Go.
-4. **Resolução de SSL**: O Traefik faz o desafio Let's Encrypt (HTTP challenge) para o subdomínio e emite o certificado SSL automaticamente.
-5. **Acesso**: O cliente pode imediatamente acessar `https://testejr.topautomacaojr.top/menu` de forma segura.
+```bash
+docker run --rm -v "$PWD":/src --network crm_default -w /src \
+  -e GOFLAGS=-mod=mod -e CGO_ENABLED=0 \
+  -e TEST_DB_HOST=... -e TEST_DB_USER=... -e TEST_DB_PASSWORD=... \
+  -e TEST_DB_NAME=cardapio_test \
+  golang:1.23 go test ./...
 
-### Exemplo de Configuração Gerada (`traefik_dynamic/testejr.yml`):
-```yaml
-http:
-  routers:
-    router-testejr:
-      rule: "Host(`testejr.topautomacaojr.top`) || Host(`www.testejr.topautomacaojr.top`)"
-      entryPoints:
-        - websecure
-      tls:
-        certResolver: myresolver
-      service: service-testejr
-
-  services:
-    service-testejr:
-      loadBalancer:
-        servers:
-          - url: "http://cardapio_online_api:8081"
+# Lint do frontend — apanha identificadores inexistentes, que a verificação
+# de sintaxe não apanha.
+docker run --rm -v "$PWD":/app -w /app/static/js node:20-alpine \
+  sh -c 'npm i -g eslint@8 >/dev/null 2>&1; eslint *.js'
 ```
 
----
+**Sem `TEST_DB_HOST` os testes de isolamento de tenant são ignorados**, não passados. São a
+cobertura mais importante do projecto: verificam que um restaurante não consegue ver nem
+alterar os dados de outro. O CI falha se forem ignorados.
 
-## 📡 Configuração de DNS para Clientes (B2B)
-
-Como dono do SaaS, você não precisa fazer nenhuma alteração de DNS para cada cliente que usar o subdomínio gratuito.
-
-### 1. Subdomínios Wildcard (Grátis):
-Basta configurar uma única entrada do tipo **A** ou **CNAME** wildcard no painel da sua hospedagem DNS (como Cloudflare) apontando para o IP do seu servidor:
-- **Tipo**: `A`
-- **Nome/Host**: `*`
-- **Destino/IP**: `[IP_DO_SEU_SERVIDOR]`
-
-Isso garante que qualquer subdomínio (como `restaurante.topautomacaojr.top`) aponte automaticamente para a sua VPS.
-
-### 2. Domínios Customizados (Clientes Próprios):
-Quando um cliente deseja usar seu próprio domínio (ex: `pizzariadojoao.com.br`), oriente-o a criar as seguintes entradas no painel DNS dele:
-- **Entrada Principal (A)**:
-  - **Tipo**: `A`
-  - **Nome/Host**: `@`
-  - **Destino**: `[IP_DO_SEU_SERVIDOR]`
-- **Entrada CNAME (www)**:
-  - **Tipo**: `CNAME`
-  - **Nome/Host**: `www`
-  - **Destino**: `topautomacaojr.top`
-
-Dentro do painel administrativo do lojista, ele poderá salvar o domínio dele e clicar em **"Validar DNS"**. O backend irá checar via `net.LookupIP` se os apontamentos foram feitos corretamente antes de habilitar a rota.
+81 testes: aritmética de dinheiro e IVA, isolamento entre restaurantes, autenticação,
+processamento de imagens, validações portuguesas (NIF, código postal, telefone) e geração da
+configuração do Traefik.
 
 ---
 
-## 🐳 Executando a Aplicação localmente ou em Produção
+## Como o encaminhamento funciona
 
-Certifique-se de que possui o **Docker** e o **Docker Compose** instalados na máquina.
+1. Um restaurante registra-se e escolhe o seu endereço (`slug`).
+2. O backend escreve `traefik_dynamic/<slug>.yml` de forma atómica.
+3. O Traefik detecta o ficheiro (`watch=true`) e cria a rota.
+4. No primeiro acesso por HTTPS, o Let's Encrypt emite o certificado.
 
-1. **Clone o repositório** para sua VPS ou ambiente local.
-2. **Configure o arquivo `.env`** com as credenciais do banco de dados e domínio.
-3. **Execute o comando de inicialização**:
-   ```bash
-   docker compose down && docker compose up --build -d
-   ```
-4. **Verifique os Logs**:
-   - Para inspecionar os logs do backend: `docker logs cardapio_online_api -f`
-   - Para inspecionar o roteamento e geração de certificados SSL no Traefik: `docker logs cardapio_traefik -f`
+Entre os passos 2 e 4 passam cerca de catorze segundos, durante os quais o endereço ainda
+não responde. O painel mostra esse estado em vez de dar um link que falha — ver
+`GET /api/admin/storefront/status`.
 
-O sistema irá inicializar a API Go na porta `8081` (interna), mapear as pastas estáticas e de uploads e conectar com o banco. O Traefik escutará nas portas `80` e `443` para gerenciar todo o tráfego de entrada.
+Domínios próprios exigem prova de propriedade por registo TXT antes de serem encaminhados.
 
-# cardapioon
+---
+
+## Documentação
+
+- [`AGENTS.md`](AGENTS.md) — guia para quem trabalha no código: invariantes, armadilhas,
+  convenções, API completa.
+- `internal/db/migrations/` — a fonte de verdade do esquema, com o motivo de cada alteração.
+- Comentários no código explicam **porquê**, não o quê. Vale a pena lê-los antes de mudar
+  uma decisão que pareça estranha.
