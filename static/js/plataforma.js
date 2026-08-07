@@ -721,6 +721,9 @@ async function sair() {
 
 async function guardarSenha(e) {
   e.preventDefault();
+  const btn = $('senha-guardar');
+  btn.disabled = true;
+
   try {
     const d = await apiP('/api/plataforma/conta/alterar-senha', {
       metodo: 'POST',
@@ -729,12 +732,19 @@ async function guardarSenha(e) {
         nova_senha: $('senha-nova').value,
       },
     });
+
+    // A alteração revoga todas as sessões, incluindo esta, e o servidor devolve uma nova em
+    // troca. Sem guardar estes tokens, o refresh token em localStorage fica revogado e a
+    // sessão morre sem aviso quando o access token expirar.
+    SessaoPlataforma.guardar(d);
+
     showToast(d.message, 'success');
     $('senha-fundo').hidden = true;
     $('senha-form').reset();
-    // A alteração revoga as outras sessões, mas não esta: o token continua válido.
   } catch (err) {
     if (err.status !== 401) showToast(err.message, 'error');
+  } finally {
+    btn.disabled = false;
   }
 }
 

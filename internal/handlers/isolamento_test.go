@@ -1790,3 +1790,118 @@ func TestLoginDaPlataformaNaoAceitaContaDeLojista(t *testing.T) {
 		t.Errorf("token do login da plataforma aceito em /api/admin/cardapio: status %d", rec.Code)
 	}
 }
+
+// TestAlterarSenhaDaPlataforma cobre a regressão que fez a alteração de senha parecer não
+// funcionar em produção.
+//
+// A senha actual errada devolvia 401. O cliente trata 401 como sessão expirada — renova,
+// repete, falha outra vez e manda o utilizador para o login — pelo que a mensagem «a senha
+// actual está incorrecta» nunca chegava ao ecrã. O código tem de ser 403: quem está aqui
+// está autenticado, apenas falhou a reconfirmação.
+func TestAlterarSenhaDaPlataforma(t *testing.T) {
+	amb := montarAmbiente(t)
+	token := amb.tokenDaPlataforma()
+
+	t.Run("senha actual errada devolve 403 e não 401", func(t *testing.T) {
+		rec := amb.fazer(pedidoHTTP{
+			metodo: "POST", rota: "/api/plataforma/conta/alterar-senha",
+			corpo: `{"senha_atual":"NaoEhEstaSenha9","nova_senha":"SenhaNovaValida7"}`,
+			token: token,
+		})
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("status %d, esperado 403: %s", rec.Code, rec.Body.String())
+		}
+		// E a mensagem tem de ser accionável, não genérica.
+		if !strings.Contains(rec.Body.String(), "senha actual") {
+			t.Errorf("mensagem não diz o que está errado: %s", rec.Body.String())
+		}
+
+		// A senha não pode ter mudado.
+		var admin models.PlataformaAdmin
+		if err := amb.gdb.First(&admin, amb.adminPlataforma.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if admin.SenhaHash != amb.adminPlataforma.SenhaHash {
+			t.Error("a senha foi alterada apesar de a senha actual estar errada")
+		}
+	})
+
+	t.Run("senha nova fraca devolve 400", func(t *testing.T) {
+		rec := amb.fazer(pedidoHTTP{
+			metodo: "POST", rota: "/api/plataforma/conta/alterar-senha",
+			corpo: `{"senha_atual":"SenhaTeste123","nova_senha":"curta"}`,
+			token: token,
+		})
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status %d, esperado 400: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("alteração devolve sessão nova e revoga as antigas", func(t *testing.T) {
+		// Uma sessão anterior, que tem de ficar revogada.
+		antigo, hashAntigo := auth.NewRefreshToken()
+		if err := amb.gdb.Create(&models.PlataformaRefreshToken{
+			AdminID: amb.adminPlataforma.ID, TokenHash: hashAntigo,
+			ExpiresAt: time.Now().Add(24 * time.Hour), CreatedAt: time.Now(),
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+
+		rec := amb.fazer(pedidoHTTP{
+			metodo: "POST", rota: "/api/plataforma/conta/alterar-senha",
+			corpo: `{"senha_atual":"SenhaTeste123","nova_senha":"SenhaNovaValida7"}`,
+			token: token,
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+		}
+
+		// A resposta traz uma sessão nova. Sem ela, o refresh token guardado no browser fica
+		// revogado e a sessão morre sem aviso quando o access token expirar.
+		var resp struct {
+			AccessToken  string `json:"access_token"`
+			RefreshToken string `json:"refresh_token"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.AccessToken == "" || resp.RefreshToken == "" {
+			t.Fatal("a alteração de senha não devolveu uma sessão nova")
+		}
+		if rec := amb.fazer(pedidoHTTP{metodo: "GET", rota: "/api/plataforma/eu",
+			token: resp.AccessToken}); rec.Code != http.StatusOK {
+			t.Errorf("o token devolvido pela alteração não funciona: status %d", rec.Code)
+		}
+
+		// A sessão anterior deixou de renovar.
+		if rec := amb.fazer(pedidoHTTP{
+			metodo: "POST", rota: "/api/plataforma/refresh",
+			corpo: fmt.Sprintf(`{"refresh_token":%q}`, antigo),
+		}); rec.Code != http.StatusUnauthorized {
+			t.Errorf("sessão anterior continuou a renovar: status %d", rec.Code)
+		}
+
+		// A senha antiga já não entra, a nova entra.
+		rec = amb.fazer(pedidoHTTP{
+			metodo: "POST", rota: "/api/plataforma/login",
+			corpo: fmt.Sprintf(`{"identifier":%q,"password":"SenhaTeste123"}`, amb.adminPlataforma.Email),
+		})
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("a senha antiga continuou a funcionar: status %d", rec.Code)
+		}
+		rec = amb.fazer(pedidoHTTP{
+			metodo: "POST", rota: "/api/plataforma/login",
+			corpo: fmt.Sprintf(`{"identifier":%q,"password":"SenhaNovaValida7"}`, amb.adminPlataforma.Email),
+		})
+		if rec.Code != http.StatusOK {
+			t.Errorf("a senha nova não funciona: status %d: %s", rec.Code, rec.Body.String())
+		}
+
+		// E ficou auditado.
+		var registo models.AuditLog
+		if err := amb.gdb.Where("acao = ?", "plataforma_senha_alterada").
+			Order("id desc").First(&registo).Error; err != nil {
+			t.Errorf("alteração de senha não auditada: %v", err)
+		}
+	})
+}

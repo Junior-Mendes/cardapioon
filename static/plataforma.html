@@ -236,11 +236,14 @@
         <div class="form-group" style="margin-top:1rem;">
           <label for="senha-nova">Senha nova</label>
           <input type="password" id="senha-nova" class="form-control" required
-                 autocomplete="new-password">
+                 minlength="8" autocomplete="new-password">
+          <!-- As regras aqui em vez de só na resposta do servidor: uma senha recusada
+               depois de submeter obriga a adivinhar o que faltava. -->
+          <p class="p-campo-ajuda">Pelo menos 8 caracteres, com uma letra e um número.</p>
         </div>
         <div class="p-modal-acoes">
           <button type="button" class="btn btn-secondary" id="senha-cancelar">Cancelar</button>
-          <button type="submit" class="btn btn-primary">Guardar</button>
+          <button type="submit" class="btn btn-primary" id="senha-guardar">Guardar</button>
         </div>
       </form>
     </div>

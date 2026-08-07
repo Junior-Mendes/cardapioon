@@ -76,11 +76,13 @@ func (h *Handler) PlataformaLogin(c *gin.Context) {
 	}
 
 	slog.Info("acesso ao painel da plataforma", "admin_id", admin.ID, "ip", c.ClientIP())
-	h.responderComSessaoPlataforma(c, http.StatusOK, &admin)
+	h.responderComSessaoPlataforma(c, http.StatusOK, &admin, nil)
 }
 
 // responderComSessaoPlataforma emite o par de tokens do painel da plataforma.
-func (h *Handler) responderComSessaoPlataforma(c *gin.Context, status int, a *models.PlataformaAdmin) {
+func (h *Handler) responderComSessaoPlataforma(
+	c *gin.Context, status int, a *models.PlataformaAdmin, extra gin.H,
+) {
 	accessToken, expiraEm, err := h.Tokens.IssuePlataformaToken(a.ID)
 	if err != nil {
 		h.erroInterno(c, "emitir token da plataforma", err)
@@ -101,7 +103,7 @@ func (h *Handler) responderComSessaoPlataforma(c *gin.Context, status int, a *mo
 		return
 	}
 
-	c.JSON(status, gin.H{
+	resposta := gin.H{
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
 		"token_type":    "Bearer",
@@ -111,7 +113,11 @@ func (h *Handler) responderComSessaoPlataforma(c *gin.Context, status int, a *mo
 			"nome":  a.Nome,
 			"email": a.Email,
 		},
-	})
+	}
+	for k, v := range extra {
+		resposta[k] = v
+	}
+	c.JSON(status, resposta)
 }
 
 // PlataformaRefresh troca um refresh token da plataforma por um novo par.
@@ -237,8 +243,14 @@ func (h *Handler) PlataformaAlterarSenha(c *gin.Context) {
 		return
 	}
 
+	// 403, e não 401: quem está aqui **está** autenticado, só falhou a reconfirmação da
+	// senha. Com 401, o cliente não consegue distinguir isto de uma sessão expirada — trata
+	// a resposta como sessão morta, tenta renovar, repete o pedido, falha outra vez e manda
+	// o utilizador para o login. Foi o que aconteceu em produção: a mensagem «a senha actual
+	// está incorrecta» nunca chegava ao ecrã, e a alteração parecia simplesmente não
+	// funcionar.
 	if _, err := auth.VerifyPassword(admin.SenhaHash, in.SenhaAtual); err != nil {
-		erroCliente(c, http.StatusUnauthorized, "A senha actual está incorrecta")
+		erroCliente(c, http.StatusForbidden, "A senha actual está incorrecta")
 		return
 	}
 
@@ -257,8 +269,10 @@ func (h *Handler) PlataformaAlterarSenha(c *gin.Context) {
 		return
 	}
 
-	// Mudar a senha termina as outras sessões: se a conta estava comprometida, quem a tinha
-	// perde o acesso a toda a plataforma.
+	// Mudar a senha termina TODAS as sessões, incluindo esta: se a conta estava
+	// comprometida, quem a tinha perde o acesso a toda a plataforma. Não há forma de
+	// identificar o refresh token deste pedido — o access token não o transporta — pelo que
+	// poupar a sessão actual obrigaria o cliente a enviar o seu refresh token só para isso.
 	if err := h.DB.Model(&models.PlataformaRefreshToken{}).
 		Where("admin_id = ? AND revoked_at IS NULL", admin.ID).
 		Update("revoked_at", agora).Error; err != nil {
@@ -266,7 +280,13 @@ func (h *Handler) PlataformaAlterarSenha(c *gin.Context) {
 	}
 
 	h.auditarPlataforma(c, "plataforma_senha_alterada", "plataforma_admin", fmt.Sprint(admin.ID), "", nil)
-	c.JSON(http.StatusOK, gin.H{
+
+	// Em troca, emitimos aqui uma sessão nova. Sem isto, quem muda a senha fica com o
+	// access token válido durante o resto do seu tempo de vida e é expulso sem aviso quando
+	// a renovação falhar — a alteração parece ter funcionado e a sessão morre minutos
+	// depois, o que é pior do que ser expulso de imediato.
+	admin.SenhaHash = novoHash
+	h.responderComSessaoPlataforma(c, http.StatusOK, &admin, gin.H{
 		"message": "Senha alterada. As outras sessões abertas foram terminadas.",
 	})
 }
